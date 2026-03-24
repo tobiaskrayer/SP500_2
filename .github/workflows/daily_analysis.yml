@@ -1,0 +1,47 @@
+name: Tägliche S&P500 Analyse
+
+on:
+  schedule:
+    # Mo–Fr um 21:30 UTC = 16:30 ET (30 Min nach US-Marktschluss)
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch:
+    # Manueller Start über GitHub UI jederzeit möglich
+
+jobs:
+  analyze:
+    name: S&P500 Scan
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write   # Erlaubt git push zurück ins Repo
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Python 3.11 einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements.txt
+
+      - name: S&P500 Analyse durchführen
+        run: python run_analysis.py
+
+      - name: Cache-Ergebnis committen und pushen
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add cache/
+          # Nur committen wenn sich etwas geändert hat
+          if git diff --staged --quiet; then
+            echo "Keine neuen Ergebnisse — nichts zu committen."
+          else
+            git commit -m "Analyse $(date -u +'%Y-%m-%d') [skip ci]"
+            git push
+          fi
