@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-24T21:18:18.014682",
+  "timestamp": "2026-03-24T23:01:10.024353",
   "market": {
     "passed": false,
     "warning": false,
@@ -266,5 +266,5 @@
   },
   "recommendations": [],
   "all_results": [],
-  "scan_duration_s": 0.4
+  "scan_duration_s": 0.6
 }
