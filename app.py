@@ -38,11 +38,15 @@ def init_app():
         if cached:
             st.session_state.scan_result = cached
 
-    # Täglichen Scheduler starten (einmalig)
+    # Scheduler nur lokal starten, nicht auf Streamlit Cloud
+    # (auf Streamlit Cloud übernimmt GitHub Actions die tägliche Aktualisierung)
     if not st.session_state.scheduler_started:
-        from scheduler import start_daily_scheduler
-        app_state = {}
-        start_daily_scheduler(app_state)
+        import os
+        is_streamlit_cloud = os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("IS_STREAMLIT_CLOUD")
+        if not is_streamlit_cloud:
+            from scheduler import start_daily_scheduler
+            app_state = {}
+            start_daily_scheduler(app_state)
         st.session_state.scheduler_started = True
 
 
@@ -62,19 +66,23 @@ def render_sidebar():
 
         st.divider()
 
-        # Scan-Button
-        scan_running = False
-        try:
-            from scheduler import is_scan_running
-            scan_running = is_scan_running()
-        except Exception:
-            pass
-
-        if scan_running:
-            st.info("Scan läuft...")
+        # Scan-Button (nur lokal — auf Streamlit Cloud läuft GitHub Actions)
+        import os
+        on_cloud = bool(os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("IS_STREAMLIT_CLOUD"))
+        if on_cloud:
+            st.caption("Aktualisierung täglich via GitHub Actions")
         else:
-            if st.button("Analyse neu starten", use_container_width=True, type="primary"):
-                _start_scan()
+            scan_running = False
+            try:
+                from scheduler import is_scan_running
+                scan_running = is_scan_running()
+            except Exception:
+                pass
+            if scan_running:
+                st.info("Scan läuft...")
+            else:
+                if st.button("Analyse neu starten", use_container_width=True, type="primary"):
+                    _start_scan()
 
         # Letzte Aktualisierung
         if st.session_state.scan_result:
@@ -118,8 +126,13 @@ def page_market_overview(result: dict | None):
     st.header("Marktübersicht")
 
     if result is None:
-        st.warning("Noch keine Analysedaten vorhanden. Starte die Analyse über die Seitenleiste.")
-        _show_quick_market()
+        st.info(
+            "Noch keine Analysedaten vorhanden.\n\n"
+            "Die erste Analyse wird automatisch von **GitHub Actions** durchgeführt "
+            "(täglich Mo–Fr um 22:30 Uhr). "
+            "Du kannst den Scan auch manuell über **GitHub → Actions → Run workflow** starten.",
+            icon="⏳"
+        )
         return
 
     market = result.get("market", {})
