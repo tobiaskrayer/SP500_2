@@ -89,8 +89,10 @@ def render_sidebar():
             ts = st.session_state.scan_result.get("timestamp", "")
             if ts:
                 try:
-                    dt = datetime.fromisoformat(ts)
-                    st.caption(f"Letzte Analyse: {dt.strftime('%d.%m.%Y %H:%M')}")
+                    from zoneinfo import ZoneInfo
+                    dt_utc = datetime.fromisoformat(ts).replace(tzinfo=ZoneInfo("UTC"))
+                    dt_berlin = dt_utc.astimezone(ZoneInfo("Europe/Berlin"))
+                    st.caption(f"Letzte Analyse: {dt_berlin.strftime('%d.%m.%Y %H:%M')} (DE)")
                 except Exception:
                     pass
 
