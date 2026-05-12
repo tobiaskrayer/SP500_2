@@ -36,6 +36,13 @@ def main():
     result = run_full_scan(progress_callback=progress)
     save_cache(result)
 
+    try:
+        from history.logger import append_scan_result
+        append_scan_result(result)
+        logger.info("History-Log aktualisiert")
+    except Exception as e:
+        logger.warning(f"History-Logging fehlgeschlagen (nicht kritisch): {e}")
+
     market = result.get("market", {})
     recommendations = result.get("recommendations", [])
     all_results = result.get("all_results", [])
