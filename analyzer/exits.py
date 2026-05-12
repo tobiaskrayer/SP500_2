@@ -6,7 +6,18 @@ Die 4-Gate-Filterlogik bleibt unverändert.
 
 import pandas as pd
 import numpy as np
-from config import EXITS
+
+try:
+    from config import EXITS
+except ImportError:
+    EXITS = {
+        "atr_stop_multiplier": 2.0,
+        "atr_target_multiplier": 3.0,
+        "rsi_overbought": 75,
+        "bb_exit_pct": 0.95,
+        "warn_signals": 1,
+        "sell_signals": 3,
+    }
 
 
 def compute_exits(hist: pd.DataFrame, entry_price: float = None) -> dict:

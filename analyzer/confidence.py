@@ -5,7 +5,14 @@ Die 4-Gate-Logik (recommended-Flag) bleibt unverändert.
 """
 
 import numpy as np
-from config import CONFIDENCE
+
+try:
+    from config import CONFIDENCE
+except ImportError:
+    CONFIDENCE = {
+        "strong_buy_threshold": 0.85,
+        "moderate_buy_threshold": 0.70,
+    }
 
 
 def compute_confidence(tech_score: float, fund_score: float, rs: dict) -> dict:
