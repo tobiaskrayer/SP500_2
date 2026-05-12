@@ -716,7 +716,9 @@ def page_performance():
     st.caption("Wie gut haben die Empfehlungen der letzten Monate abgeschnitten?")
 
     from history.logger import load_log
-    import yfinance as yf
+    from history.performance import enrich_with_performance
+    from history import analytics as ana
+    from history.export import generate_markdown_report, generate_json_export
 
     log = load_log()
     if not log:
@@ -726,94 +728,272 @@ def page_performance():
         )
         return
 
-    # Auswertung: aktuelle Kurse für alle historischen Empfehlungen laden
-    all_recs = []
-    for entry in log:
-        for r in entry.get("recommendations", []):
-            all_recs.append({
-                "date": entry["date"],
-                "ticker": r["ticker"],
-                "entry_price": r.get("price"),
-                "confidence_label": r.get("confidence_label", "—"),
-                "combined_score": r.get("combined_score"),
-            })
+    # Performance-Daten laden (mit Spinner, da yfinance-Calls)
+    with st.spinner("Lade historische Performance-Daten..."):
+        enriched = enrich_with_performance(log)
 
-    if not all_recs:
+    if not enriched:
         st.info("Keine Empfehlungen in der Historie gefunden.")
         return
 
-    # Aktuelle Kurse für alle Ticker laden (gecacht)
-    tickers_unique = list({r["ticker"] for r in all_recs if r["entry_price"]})
-    current_prices = {}
-    if tickers_unique:
-        with st.spinner("Lade aktuelle Kurse für Performance-Berechnung..."):
-            for t in tickers_unique:
-                try:
-                    h = yf.Ticker(t).history(period="5d")
-                    if h is not None and len(h) > 0:
-                        current_prices[t] = float(h["Close"].iloc[-1])
-                except Exception:
-                    pass
+    stats = ana.summary_stats(enriched)
+
+    # ── Aggregierte Kennzahlen ────────────────────────────────────────────────
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Empfehlungen gesamt", stats["total"])
+    with col2:
+        if stats.get("measurable", 0) > 0:
+            st.metric("Trefferquote 1M", f"{stats['hit_rate']}%",
+                      delta_color="normal" if stats["hit_rate"] >= 50 else "inverse")
+        else:
+            st.metric("Trefferquote 1M", "—", help="Weniger als 30 Tage Daten")
+    with col3:
+        if stats.get("avg_perf_1m") is not None:
+            st.metric("Ø Performance 1M", f"{stats['avg_perf_1m']:+.1f}%",
+                      delta_color="normal" if stats["avg_perf_1m"] >= 0 else "inverse")
+        else:
+            st.metric("Ø Performance 1M", "—")
+    with col4:
+        if stats.get("avg_vs_spy_1m") is not None:
+            st.metric("vs. SPY 1M", f"{stats['avg_vs_spy_1m']:+.1f}%",
+                      delta_color="normal" if stats["avg_vs_spy_1m"] >= 0 else "inverse")
+        else:
+            st.metric("vs. SPY 1M", "—")
+
+    st.divider()
+
+    # ── Analyse-Tabs ──────────────────────────────────────────────────────────
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Konfidenz-Kalibrierung",
+        "🔬 Signal-Wirksamkeit",
+        "🏭 Sektoren",
+        "📈 Alle Empfehlungen",
+        "📥 Export für Claude",
+    ])
+
+    with tab1:
+        _render_confidence_chart(ana.by_confidence(enriched))
+
+    with tab2:
+        st.subheader("Technische Signale")
+        _render_signal_table(ana.signal_effectiveness(enriched, "tech"))
+        st.subheader("Fundamentals-Signale")
+        _render_signal_table(ana.signal_effectiveness(enriched, "fund"))
+
+    with tab3:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            _render_sector_chart(ana.by_sector(enriched))
+        with col_b:
+            _render_vix_chart(ana.by_vix(enriched))
+
+    with tab4:
+        _render_all_recommendations_table(enriched)
+
+    with tab5:
+        _render_export_section(enriched, generate_markdown_report, generate_json_export)
+
+
+def _render_confidence_chart(conf_data: list[dict]):
+    if not conf_data:
+        st.info("Noch keine auswertbaren Daten (mindestens 30 Tage Haltedauer nötig).")
+        return
+
+    import plotly.graph_objects as go
+
+    labels = [c["label"] for c in conf_data]
+    hit_rates = [c["hit_rate"] for c in conf_data]
+    avg_perfs = [c["avg_perf"] for c in conf_data]
+    ns = [c["n"] for c in conf_data]
+
+    colors = {"Strong Buy": "#4CAF50", "Moderate Buy": "#FF9800", "Watch": "#2196F3", "Unbekannt": "#9E9E9E"}
+    bar_colors = [colors.get(l, "#9E9E9E") for l in labels]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="Trefferquote %",
+        x=labels, y=hit_rates,
+        marker_color=bar_colors, opacity=0.8,
+        text=[f"{v:.0f}% (n={n})" for v, n in zip(hit_rates, ns)],
+        textposition="outside",
+    ))
+    fig.add_hline(y=50, line_dash="dash", line_color="gray", annotation_text="50% Break-Even")
+    fig.update_layout(
+        title="Trefferquote je Konfidenz-Label (1M positiv)",
+        yaxis_title="Trefferquote %", height=350,
+        margin=dict(l=0, r=0, t=50, b=0),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(
+        name="Ø Performance 1M",
+        x=labels, y=avg_perfs,
+        marker_color=[c if p >= 0 else "#F44336" for c, p in zip(bar_colors, avg_perfs)],
+        text=[f"{v:+.1f}%" for v in avg_perfs],
+        textposition="outside",
+    ))
+    fig2.add_hline(y=0, line_color="gray")
+    fig2.update_layout(
+        title="Ø Performance nach 1M je Konfidenz-Label",
+        yaxis_title="Performance %", height=300,
+        margin=dict(l=0, r=0, t=50, b=0),
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+
+def _render_signal_table(sig_data: list[dict]):
+    if not sig_data:
+        st.info("Noch keine auswertbaren Daten.")
+        return
 
     rows = []
-    for r in all_recs:
-        entry_price = r["entry_price"]
-        cp = current_prices.get(r["ticker"])
-        pnl_pct = round((cp / entry_price - 1) * 100, 2) if cp and entry_price else None
+    for s in sig_data:
+        delta = s["delta"]
+        warn = " ⚠️" if (delta is not None and delta < 0) else ""
         rows.append({
-            "Datum": r["date"],
-            "Ticker": r["ticker"],
-            "Konfidenz": r["confidence_label"],
-            "Score": f"{r['combined_score']*100:.0f}%" if r["combined_score"] else "—",
-            "Einstieg": f"${entry_price:.2f}" if entry_price else "—",
-            "Aktuell": f"${cp:.2f}" if cp else "N/A",
-            "Performance": f"{pnl_pct:+.1f}%" if pnl_pct is not None else "N/A",
-            "Positiv": pnl_pct is not None and pnl_pct > 0,
+            "Signal": s["signal"],
+            "Aktiv (n)": s["active_n"],
+            "Ø Perf aktiv": f"{s['active_avg_perf']:+.1f}%" if s["active_avg_perf"] is not None else "—",
+            "Inaktiv (n)": s["inactive_n"],
+            "Ø Perf inaktiv": f"{s['inactive_avg_perf']:+.1f}%" if s["inactive_avg_perf"] is not None else "—",
+            "Delta": f"{delta:+.1f}%{warn}" if delta is not None else "—",
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption("⚠️ = Signal mit negativem Delta — Aktiv-Empfehlungen schnitten schlechter ab als Inaktiv-Empfehlungen.")
+
+
+def _render_sector_chart(sector_data: list[dict]):
+    if not sector_data:
+        st.info("Noch keine Sektor-Daten.")
+        return
+
+    import plotly.graph_objects as go
+
+    sectors = [s["sector"] for s in sector_data]
+    avg_perfs = [s["avg_perf"] for s in sector_data]
+    ns = [s["n"] for s in sector_data]
+
+    fig = go.Figure(go.Bar(
+        x=avg_perfs, y=sectors, orientation="h",
+        marker_color=["#4CAF50" if p >= 0 else "#F44336" for p in avg_perfs],
+        text=[f"{v:+.1f}% (n={n})" for v, n in zip(avg_perfs, ns)],
+        textposition="outside",
+    ))
+    fig.add_vline(x=0, line_color="gray")
+    fig.update_layout(
+        title="Ø Performance 1M je Sektor",
+        xaxis_title="Performance %", height=max(300, 40 * len(sectors)),
+        margin=dict(l=0, r=0, t=50, b=0),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_vix_chart(vix_data: list[dict]):
+    if not vix_data:
+        st.info("Noch keine VIX-Kontext-Daten (ältere Log-Einträge haben keinen Marktkontext).")
+        return
+
+    import plotly.graph_objects as go
+
+    buckets = [v["vix_bucket"] for v in vix_data]
+    perfs = [v["avg_perf"] for v in vix_data]
+    ns = [v["n"] for v in vix_data]
+
+    fig = go.Figure(go.Bar(
+        x=buckets, y=perfs,
+        marker_color=["#4CAF50" if p >= 0 else "#F44336" for p in perfs],
+        text=[f"{v:+.1f}% (n={n})" for v, n in zip(perfs, ns)],
+        textposition="outside",
+    ))
+    fig.add_hline(y=0, line_color="gray")
+    fig.update_layout(
+        title="Ø Performance 1M je VIX-Bereich",
+        yaxis_title="Performance %", height=300,
+        margin=dict(l=0, r=0, t=50, b=0),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_all_recommendations_table(enriched: list[dict]):
+    rows = []
+    for r in enriched:
+        rows.append({
+            "Datum": r.get("rec_date", ""),
+            "Ticker": r.get("ticker", ""),
+            "Konfidenz": r.get("confidence_label", "—"),
+            "Sektor": r.get("sector", "N/A"),
+            "Einstieg": f"${r['price']:.2f}" if r.get("price") else "—",
+            "Perf 1W": f"{r['performance_1w']:+.1f}%" if r.get("performance_1w") is not None else "—",
+            "Perf 1M": f"{r['performance_1m']:+.1f}%" if r.get("performance_1m") is not None else "—",
+            "Perf 3M": f"{r['performance_3m']:+.1f}%" if r.get("performance_3m") is not None else "—",
+            "vs SPY": f"{r['perf_vs_spy_1m']:+.1f}%" if r.get("perf_vs_spy_1m") is not None else "—",
+            "Hit (1M)": "✅" if r.get("hit_1m") else ("❌" if r.get("performance_1m") is not None else "—"),
         })
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows).sort_values(["Datum", "Konfidenz"], ascending=[False, True])
 
-    # Aggregierte Statistik
-    perf_known = [r for r in rows if r["Performance"] != "N/A"]
-    if perf_known:
-        positive = sum(1 for r in perf_known if r["Positiv"])
-        hit_rate = positive / len(perf_known) * 100
-        avg_perf = sum(float(r["Performance"].replace("%", "")) for r in perf_known) / len(perf_known)
-
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Empfehlungen gesamt", len(perf_known))
-        with col2:
-            st.metric("Trefferquote (positiv)", f"{hit_rate:.0f}%",
-                      delta_color="normal" if hit_rate >= 50 else "inverse")
-        with col3:
-            st.metric("Ø Performance", f"{avg_perf:+.1f}%",
-                      delta_color="normal" if avg_perf >= 0 else "inverse")
-        with col4:
-            best = max(perf_known, key=lambda r: float(r["Performance"].replace("%", "")))
-            st.metric("Beste Empfehlung", best["Ticker"], delta=best["Performance"])
-
-        st.divider()
-
-    # Filter
     col1, col2 = st.columns([2, 1])
     with col1:
-        labels = ["Alle"] + sorted(df["Konfidenz"].unique().tolist())
-        selected_label = st.selectbox("Konfidenz filtern", labels)
+        label_opts = ["Alle"] + sorted(df["Konfidenz"].dropna().unique().tolist())
+        sel_label = st.selectbox("Konfidenz filtern", label_opts, key="perf_label_filter")
     with col2:
-        only_positive = st.checkbox("Nur positive Empfehlungen")
+        only_measurable = st.checkbox("Nur auswertbare (≥30d)", value=False)
 
     filtered = df.copy()
-    if selected_label != "Alle":
-        filtered = filtered[filtered["Konfidenz"] == selected_label]
-    if only_positive:
-        filtered = filtered[filtered["Positiv"] == True]
+    if sel_label != "Alle":
+        filtered = filtered[filtered["Konfidenz"] == sel_label]
+    if only_measurable:
+        filtered = filtered[filtered["Perf 1M"] != "—"]
 
     st.caption(f"{len(filtered)} Einträge")
-    st.dataframe(
-        filtered.drop(columns=["Positiv"]),
-        use_container_width=True,
-        hide_index=True,
+    st.dataframe(filtered, use_container_width=True, hide_index=True)
+
+
+def _render_export_section(enriched, generate_markdown_report, generate_json_export):
+    st.subheader("Export für Claude — Code-Verbesserungsanalyse")
+    st.write(
+        "Generiere einen vollständigen Performance-Report, den du direkt an Claude geben kannst. "
+        "Claude analysiert, welche Signale funktionieren, welche Schwellen angepasst werden sollten "
+        "und wo die Strategie systematische Schwächen hat."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**Markdown-Report** (für Claude empfohlen)")
+        st.caption("Strukturierter Bericht mit Tabellen, Signalanalyse, Konfiguration und konkretem Auftrag an Claude.")
+        if st.button("📄 Markdown generieren", type="primary"):
+            with st.spinner("Erstelle Report..."):
+                md = generate_markdown_report(enriched)
+            st.download_button(
+                label="⬇️ performance_report.md herunterladen",
+                data=md.encode("utf-8"),
+                file_name=f"performance_report_{datetime.today().strftime('%Y-%m-%d')}.md",
+                mime="text/markdown",
+            )
+            with st.expander("Vorschau (erste 3000 Zeichen)"):
+                st.code(md[:3000] + ("..." if len(md) > 3000 else ""), language="markdown")
+
+    with col2:
+        st.markdown("**Roh-JSON** (Rohdaten)")
+        st.caption("Alle angereicherten Empfehlungsdaten mit Performance-Werten. Für eigene Auswertung.")
+        if st.button("📦 JSON generieren"):
+            with st.spinner("Erstelle JSON..."):
+                js = generate_json_export(enriched)
+            st.download_button(
+                label="⬇️ performance_export.json herunterladen",
+                data=js.encode("utf-8"),
+                file_name=f"performance_export_{datetime.today().strftime('%Y-%m-%d')}.json",
+                mime="application/json",
+            )
+
+    st.divider()
+    st.info(
+        "**Workflow:** Report herunterladen → In Claude (claude.ai oder Claude Code) hochladen → "
+        "Fragen: *'Analysiere diesen Performance-Report und schlage konkrete Verbesserungen für config.py vor.'*",
+        icon="💡"
     )
 
 
