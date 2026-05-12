@@ -349,6 +349,22 @@ def _render_stock_card(stock: dict):
     conf_icon = _CONF_COLORS.get(confidence_label, "")
 
     upside = stock.get("upside") or {}
+    # Fallback: upside fehlt im Cache → on-the-fly nachberechnen
+    if not upside and stock.get("price"):
+        try:
+            import pandas as pd
+            from analyzer.upside import compute_upside as _compute_upside
+            hist_raw = stock.get("hist")
+            hist_df = pd.DataFrame(hist_raw) if isinstance(hist_raw, dict) else hist_raw
+            upside = _compute_upside(
+                hist=hist_df,
+                current_price=stock.get("price"),
+                ma50=(tech.get("indicators") or {}).get("ma50_val"),
+                atr=(stock.get("exits") or {}).get("atr"),
+                metrics=(fund.get("metrics") or {}),
+            )
+        except Exception:
+            upside = {}
     upside_pct = upside.get("expected_upside_pct")
     upside_label = upside.get("upside_label", "")
     _UPSIDE_ICONS = {"Hoch": "⬆️", "Mittel": "➡️", "Gering": "⬇️"}

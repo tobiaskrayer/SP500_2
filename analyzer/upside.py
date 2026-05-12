@@ -67,7 +67,8 @@ def compute_upside(
         if hist is not None and len(hist) >= 20:
             close = hist["Close"] if hasattr(hist, "__getitem__") else None
             if close is not None and len(close) > 0:
-                high_52w = float(close.max())
+                # DataFrame/Series: .max(); dict/list: max()
+                high_52w = float(close.max() if hasattr(close, "max") else max(close))
                 if high_52w > current_price:
                     result["upside_52w_pct"] = round(
                         (high_52w - current_price) / current_price * 100, 2
