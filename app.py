@@ -289,6 +289,13 @@ def page_recommendations(result: dict | None):
         return
 
     # Sortierung nach combined_score (Strong Buy zuerst)
+    # Falls Score im Cache fehlt, aus tech/fund-Score nachberechnen
+    from analyzer.confidence import compute_confidence
+    for r in recommendations:
+        if not r.get("combined_score") and (r.get("tech", {}).get("score") or r.get("fund", {}).get("score")):
+            conf = compute_confidence(r.get("tech", {}).get("score", 0), r.get("fund", {}).get("score", 0), r.get("rs") or {})
+            r["combined_score"] = conf["combined_score"]
+            r["confidence_label"] = conf["confidence_label"]
     recommendations_sorted = sorted(recommendations, key=lambda x: x.get("combined_score", 0), reverse=True)
 
     st.success(f"{len(recommendations_sorted)} Kaufempfehlung{'en' if len(recommendations_sorted) > 1 else ''} gefunden", icon="✅")
@@ -318,8 +325,14 @@ def _render_stock_card(stock: dict):
     tech = stock.get("tech", {})
     fund = stock.get("fund", {})
 
+    combined_score = stock.get("combined_score") or 0
     confidence_label = stock.get("confidence_label", "")
-    combined_score = stock.get("combined_score", 0)
+    # Fallback: Score aus Cache fehlt → on-the-fly nachberechnen
+    if not combined_score and (tech.get("score") or fund.get("score")):
+        from analyzer.confidence import compute_confidence
+        conf = compute_confidence(tech.get("score", 0), fund.get("score", 0), rs or {})
+        combined_score = conf["combined_score"]
+        confidence_label = conf["confidence_label"]
     _CONF_COLORS = {"Strong Buy": "🟢", "Moderate Buy": "🟡", "Watch": "🔵"}
     conf_icon = _CONF_COLORS.get(confidence_label, "")
 
