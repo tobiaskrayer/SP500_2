@@ -290,13 +290,31 @@ def page_recommendations(result: dict | None):
         )
         return
 
-    # Sortierung — Falls Score im Cache fehlt, on-the-fly nachberechnen
+    # Fehlende Felder im Cache on-the-fly nachberechnen — VOR der Sortierung
+    import pandas as pd
     from analyzer.confidence import compute_confidence
+    from analyzer.upside import compute_upside as _compute_upside
+
     for r in recommendations:
+        # Konfidenz-Fallback
         if not r.get("combined_score") and (r.get("tech", {}).get("score") or r.get("fund", {}).get("score")):
             conf = compute_confidence(r.get("tech", {}).get("score", 0), r.get("fund", {}).get("score", 0), r.get("rs") or {})
             r["combined_score"] = conf["combined_score"]
             r["confidence_label"] = conf["confidence_label"]
+        # Upside-Fallback
+        if not r.get("upside") and r.get("price"):
+            try:
+                hist_raw = r.get("hist")
+                hist_df = pd.DataFrame(hist_raw) if isinstance(hist_raw, dict) else hist_raw
+                r["upside"] = _compute_upside(
+                    hist=hist_df,
+                    current_price=r.get("price"),
+                    ma50=(r.get("tech", {}).get("indicators") or {}).get("ma50_val"),
+                    atr=(r.get("exits") or {}).get("atr"),
+                    metrics=(r.get("fund", {}).get("metrics") or {}),
+                )
+            except Exception:
+                r["upside"] = {}
 
     sort_options = {
         "Konfidenz (Standard)": lambda x: x.get("combined_score", 0),
