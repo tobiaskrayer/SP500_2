@@ -11,6 +11,7 @@ import yfinance as yf
 import pandas as pd
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "..", "cache", "portfolio_history.json")
+_CACHE_VERSION = "v2"  # erhöhen wenn Berechnungslogik sich ändert → Cache-Invalidierung
 
 
 def get_portfolio_history(positions: list[dict]) -> dict | None:
@@ -57,7 +58,7 @@ def get_portfolio_history(positions: list[dict]) -> dict | None:
 
     # Cache prüfen
     cached = _load_cache()
-    cache_key = f"{start_str}_{','.join(sorted(p['ticker'] for p in positions))}"
+    cache_key = f"{_CACHE_VERSION}_{start_str}_{','.join(sorted(p['ticker'] for p in positions))}"
     if cached and cached.get("cache_key") == cache_key and cached.get("end_date") == today.isoformat():
         return cached.get("result")
 
