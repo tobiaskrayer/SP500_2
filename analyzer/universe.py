@@ -29,27 +29,129 @@ def _fetch_sp500_table() -> list[tuple[str, str]]:
         result = []
         for _, row in df.iterrows():
             ticker = str(row["Symbol"]).replace(".", "-")
-            name = str(row.get("Security", row.get("Company", ticker)))
+            # pandas Series: direkte Indexierung robuster als .get()
+            try:
+                name = str(row["Security"])
+            except KeyError:
+                try:
+                    name = str(row["Company"])
+                except KeyError:
+                    name = ticker
+            if name in ("nan", "None", ""):
+                name = ticker
             result.append((ticker, name))
         logger.info(f"S&P500-Tabelle geladen: {len(result)} Titel")
         return result
     except Exception as e:
         logger.warning(f"Wikipedia-Abruf fehlgeschlagen: {e} — nutze Fallback-Liste")
-        return [(t, t) for t in _fallback_tickers()]
+        return _fallback_table()
 
 
 def _fallback_tickers() -> list[str]:
-    """Fallback: Top-100 S&P500-Titel nach Marktkapitalisierung."""
+    """Kompatibilitäts-Wrapper — gibt nur Ticker zurück."""
+    return [t for t, _ in _fallback_table()]
+
+
+def _fallback_table() -> list[tuple[str, str]]:
+    """Fallback: Top-100 S&P500-Titel mit Firmennamen."""
     return [
-        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B",
-        "AVGO", "JPM", "LLY", "V", "UNH", "XOM", "MA", "JNJ", "PG", "HD",
-        "COST", "MRK", "ABBV", "CVX", "KO", "BAC", "CRM", "NFLX", "AMD",
-        "PEP", "TMO", "ORCL", "ACN", "ADBE", "WMT", "MCD", "ABT", "PM",
-        "DHR", "CSCO", "GE", "TXN", "NEE", "CAT", "VZ", "AMGN", "IBM",
-        "MS", "RTX", "INTC", "HON", "INTU", "UPS", "GS", "QCOM", "SPGI",
-        "BKNG", "LOW", "ELV", "T", "AXP", "AMAT", "ISRG", "PLD", "DE",
-        "TJX", "MDT", "BLK", "GILD", "SYK", "VRTX", "ADI", "REGN", "MMC",
-        "CI", "MO", "ZTS", "LRCX", "PGR", "PANW", "SO", "DUK", "ICE",
-        "BSX", "CME", "AON", "CL", "HCA", "MCO", "WM", "NOC", "ETN",
-        "EMR", "ITW", "FI", "APH", "GD", "ROP", "ADP", "NSC", "KLAC",
+        ("AAPL",  "Apple Inc."),
+        ("MSFT",  "Microsoft Corporation"),
+        ("NVDA",  "NVIDIA Corporation"),
+        ("AMZN",  "Amazon.com Inc."),
+        ("GOOGL", "Alphabet Inc. (Class A)"),
+        ("META",  "Meta Platforms Inc."),
+        ("TSLA",  "Tesla Inc."),
+        ("BRK-B", "Berkshire Hathaway Inc."),
+        ("AVGO",  "Broadcom Inc."),
+        ("JPM",   "JPMorgan Chase & Co."),
+        ("LLY",   "Eli Lilly and Company"),
+        ("V",     "Visa Inc."),
+        ("UNH",   "UnitedHealth Group Inc."),
+        ("XOM",   "Exxon Mobil Corporation"),
+        ("MA",    "Mastercard Inc."),
+        ("JNJ",   "Johnson & Johnson"),
+        ("PG",    "Procter & Gamble Co."),
+        ("HD",    "Home Depot Inc."),
+        ("COST",  "Costco Wholesale Corporation"),
+        ("MRK",   "Merck & Co. Inc."),
+        ("ABBV",  "AbbVie Inc."),
+        ("CVX",   "Chevron Corporation"),
+        ("KO",    "Coca-Cola Company"),
+        ("BAC",   "Bank of America Corporation"),
+        ("CRM",   "Salesforce Inc."),
+        ("NFLX",  "Netflix Inc."),
+        ("AMD",   "Advanced Micro Devices Inc."),
+        ("PEP",   "PepsiCo Inc."),
+        ("TMO",   "Thermo Fisher Scientific Inc."),
+        ("ORCL",  "Oracle Corporation"),
+        ("ACN",   "Accenture plc"),
+        ("ADBE",  "Adobe Inc."),
+        ("WMT",   "Walmart Inc."),
+        ("MCD",   "McDonald's Corporation"),
+        ("ABT",   "Abbott Laboratories"),
+        ("PM",    "Philip Morris International Inc."),
+        ("DHR",   "Danaher Corporation"),
+        ("CSCO",  "Cisco Systems Inc."),
+        ("GE",    "GE Aerospace"),
+        ("TXN",   "Texas Instruments Inc."),
+        ("NEE",   "NextEra Energy Inc."),
+        ("CAT",   "Caterpillar Inc."),
+        ("VZ",    "Verizon Communications Inc."),
+        ("AMGN",  "Amgen Inc."),
+        ("IBM",   "International Business Machines Corp."),
+        ("MS",    "Morgan Stanley"),
+        ("RTX",   "RTX Corporation"),
+        ("INTC",  "Intel Corporation"),
+        ("HON",   "Honeywell International Inc."),
+        ("INTU",  "Intuit Inc."),
+        ("UPS",   "United Parcel Service Inc."),
+        ("GS",    "Goldman Sachs Group Inc."),
+        ("QCOM",  "QUALCOMM Inc."),
+        ("SPGI",  "S&P Global Inc."),
+        ("BKNG",  "Booking Holdings Inc."),
+        ("LOW",   "Lowe's Companies Inc."),
+        ("ELV",   "Elevance Health Inc."),
+        ("T",     "AT&T Inc."),
+        ("AXP",   "American Express Company"),
+        ("AMAT",  "Applied Materials Inc."),
+        ("ISRG",  "Intuitive Surgical Inc."),
+        ("PLD",   "Prologis Inc."),
+        ("DE",    "Deere & Company"),
+        ("TJX",   "TJX Companies Inc."),
+        ("MDT",   "Medtronic plc"),
+        ("BLK",   "BlackRock Inc."),
+        ("GILD",  "Gilead Sciences Inc."),
+        ("SYK",   "Stryker Corporation"),
+        ("VRTX",  "Vertex Pharmaceuticals Inc."),
+        ("ADI",   "Analog Devices Inc."),
+        ("REGN",  "Regeneron Pharmaceuticals Inc."),
+        ("MMC",   "Marsh & McLennan Companies Inc."),
+        ("CI",    "Cigna Group"),
+        ("MO",    "Altria Group Inc."),
+        ("ZTS",   "Zoetis Inc."),
+        ("LRCX",  "Lam Research Corporation"),
+        ("PGR",   "Progressive Corporation"),
+        ("PANW",  "Palo Alto Networks Inc."),
+        ("SO",    "Southern Company"),
+        ("DUK",   "Duke Energy Corporation"),
+        ("ICE",   "Intercontinental Exchange Inc."),
+        ("BSX",   "Boston Scientific Corporation"),
+        ("CME",   "CME Group Inc."),
+        ("AON",   "Aon plc"),
+        ("CL",    "Colgate-Palmolive Company"),
+        ("HCA",   "HCA Healthcare Inc."),
+        ("MCO",   "Moody's Corporation"),
+        ("WM",    "Waste Management Inc."),
+        ("NOC",   "Northrop Grumman Corporation"),
+        ("ETN",   "Eaton Corporation plc"),
+        ("EMR",   "Emerson Electric Co."),
+        ("ITW",   "Illinois Tool Works Inc."),
+        ("FI",    "Fiserv Inc."),
+        ("APH",   "Amphenol Corporation"),
+        ("GD",    "General Dynamics Corporation"),
+        ("ROP",   "Roper Technologies Inc."),
+        ("ADP",   "Automatic Data Processing Inc."),
+        ("NSC",   "Norfolk Southern Corporation"),
+        ("KLAC",  "KLA Corporation"),
     ]

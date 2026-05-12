@@ -745,7 +745,10 @@ def page_portfolio():
     st.subheader("Position hinzufügen")
 
     # Firmennamen laden (gecacht in session_state)
-    if "sp500_names" not in st.session_state:
+    # Cache invalidieren wenn Einträge noch keine echten Namen haben (name == ticker)
+    cached = st.session_state.get("sp500_names", {})
+    cache_has_names = any(n != t for t, n in cached.items())
+    if not cached or not cache_has_names:
         with st.spinner("Lade Aktienliste..."):
             try:
                 from analyzer.universe import get_sp500_names
