@@ -13,17 +13,29 @@ SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
 def get_sp500_tickers() -> list[str]:
     """Gibt eine Liste aller S&P500-Ticker zurück."""
+    return [t for t, _ in _fetch_sp500_table()]
+
+
+def get_sp500_names() -> dict[str, str]:
+    """Gibt ein Dict {Ticker: Firmenname} für alle S&P500-Titel zurück."""
+    return {t: n for t, n in _fetch_sp500_table()}
+
+
+def _fetch_sp500_table() -> list[tuple[str, str]]:
+    """Lädt Ticker + Firmennamen von Wikipedia. Fallback auf hartcodierte Liste."""
     try:
         tables = pd.read_html(SP500_WIKI_URL)
         df = tables[0]
-        tickers = df["Symbol"].tolist()
-        # Wikipedia verwendet manchmal Punkte statt Bindestriche (z.B. BRK.B → BRK-B)
-        tickers = [t.replace(".", "-") for t in tickers]
-        logger.info(f"S&P500-Tickerliste geladen: {len(tickers)} Titel")
-        return tickers
+        result = []
+        for _, row in df.iterrows():
+            ticker = str(row["Symbol"]).replace(".", "-")
+            name = str(row.get("Security", row.get("Company", ticker)))
+            result.append((ticker, name))
+        logger.info(f"S&P500-Tabelle geladen: {len(result)} Titel")
+        return result
     except Exception as e:
         logger.warning(f"Wikipedia-Abruf fehlgeschlagen: {e} — nutze Fallback-Liste")
-        return _fallback_tickers()
+        return [(t, t) for t in _fallback_tickers()]
 
 
 def _fallback_tickers() -> list[str]:

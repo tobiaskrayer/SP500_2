@@ -648,29 +648,38 @@ def page_portfolio():
     st.header("Mein Portfolio")
     st.caption("Eigene Käufe überwachen — mit Exit-Empfehlung")
 
-    from portfolio.manager import load_portfolio, add_position, remove_position, evaluate_positions
+    from portfolio.manager import add_position, remove_position, evaluate_positions
 
     # Positionen auswerten
-    with st.spinner("Lade aktuelle Kurse..."):
+    with st.spinner("Lade aktuelle Kurse und EUR/USD-Kurs..."):
         positions = evaluate_positions()
 
     if not positions:
         st.info("Noch keine Positionen eingetragen. Füge deine erste Position unten hinzu.")
     else:
+        # EUR/USD-Info
+        if positions and positions[0].get("eurusd"):
+            st.caption(f"EUR/USD: {positions[0]['eurusd']:.4f}")
+
         # Übersichtstabelle
         rows = []
         for p in positions:
             exits = p.get("exits", {})
             rec = exits.get("recommendation", "—")
             rec_icon = {"Halten": "✅", "Beobachten": "⚠️", "Verkaufen erwägen": "🚫"}.get(rec, "—")
+            name = p.get("company_name") or p["ticker"]
+            entry_eur = p.get("entry_price_eur")
+            curr_eur = p.get("current_price_eur")
+            curr_usd = p.get("current_price_usd")
             rows.append({
-                "Ticker": p["ticker"],
-                "Einstieg": f"${p['entry_price']:.2f}",
+                "Aktie": f"{name} ({p['ticker']})",
+                "Einstieg (€)": f"€{entry_eur:.2f}" if entry_eur else "—",
                 "Datum": p["entry_date"],
                 "Tage": p["days_held"] if p["days_held"] is not None else "—",
-                "Kurs aktuell": f"${p['current_price']:.2f}" if p["current_price"] else "N/A",
+                "Kurs (€)": f"€{curr_eur:.2f}" if curr_eur else "N/A",
+                "Kurs ($)": f"${curr_usd:.2f}" if curr_usd else "N/A",
                 "P&L %": f"{p['pnl_pct']:+.1f}%" if p["pnl_pct"] is not None else "N/A",
-                "P&L €/$": f"{p['pnl_abs']:+.2f}" if p["pnl_abs"] is not None else "N/A",
+                "P&L (€)": f"€{p['pnl_abs_eur']:+.2f}" if p.get("pnl_abs_eur") is not None else "N/A",
                 "Signale": exits.get("signal_count", 0),
                 "Empfehlung": f"{rec_icon} {rec}",
             })
@@ -682,9 +691,9 @@ def page_portfolio():
         # Detail-Expander pro Position
         for i, p in enumerate(positions):
             exits = p.get("exits", {})
-            rec = exits.get("recommendation", "—")
-            with st.expander(f"**{p['ticker']}** — Details & Exit-Signale", expanded=False):
-                _render_exit_signals(exits, entry_price=p["entry_price"])
+            name = p.get("company_name") or p["ticker"]
+            with st.expander(f"**{p['ticker']}** — {name} — Details & Exit-Signale", expanded=False):
+                _render_exit_signals(exits, entry_price=p.get("current_price_usd"))
                 st.divider()
                 if st.button(f"Position entfernen ({p['ticker']})", key=f"remove_{i}", type="secondary"):
                     remove_position(i)
@@ -692,23 +701,53 @@ def page_portfolio():
 
     st.divider()
     st.subheader("Position hinzufügen")
+
+    # Firmennamen laden (gecacht in session_state)
+    if "sp500_names" not in st.session_state:
+        with st.spinner("Lade Aktienliste..."):
+            try:
+                from analyzer.universe import get_sp500_names
+                st.session_state.sp500_names = get_sp500_names()
+            except Exception:
+                st.session_state.sp500_names = {}
+
+    names_dict = st.session_state.sp500_names  # {ticker: name}
+    # Optionen für Selectbox: "Firmenname (TICKER)" — sortiert nach Name
+    options = sorted(
+        [f"{name} ({ticker})" for ticker, name in names_dict.items()],
+        key=lambda x: x.lower(),
+    )
+    if not options:
+        options = ["(Liste nicht verfügbar — Ticker manuell eingeben)"]
+
     with st.form("add_position_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            ticker_in = st.text_input("Ticker (z.B. AAPL)", max_chars=10)
-            price_in = st.number_input("Kaufkurs ($)", min_value=0.01, step=0.01, format="%.2f")
+            selected = st.selectbox(
+                "Aktie suchen (Name oder Ticker eintippen)",
+                options=options,
+                index=None,
+                placeholder="z.B. Apple oder AAPL...",
+            )
+            price_in = st.number_input("Kaufkurs (€)", min_value=0.01, step=0.01, format="%.2f")
         with col2:
             date_in = st.date_input("Kaufdatum", value=datetime.today())
             shares_in = st.number_input("Anzahl Aktien", min_value=0.01, step=1.0, format="%.2f")
         notes_in = st.text_input("Notiz (optional)", max_chars=200)
         submitted = st.form_submit_button("Position speichern", type="primary")
         if submitted:
+            # Ticker aus "Firmenname (TICKER)" extrahieren
+            ticker_in = ""
+            company_in = ""
+            if selected and "(" in selected:
+                ticker_in = selected.rsplit("(", 1)[-1].rstrip(")")
+                company_in = selected.rsplit("(", 1)[0].strip()
             if ticker_in and price_in > 0 and shares_in > 0:
-                add_position(ticker_in, str(date_in), price_in, shares_in, notes_in)
-                st.success(f"{ticker_in.upper()} hinzugefügt!")
+                add_position(ticker_in, company_in, str(date_in), price_in, shares_in, notes_in)
+                st.success(f"{company_in} ({ticker_in}) hinzugefügt!")
                 st.rerun()
             else:
-                st.error("Bitte Ticker, Kaufkurs und Anzahl angeben.")
+                st.error("Bitte eine Aktie auswählen, Kaufkurs und Anzahl angeben.")
 
 
 # ── Seite: Performance-Tracking ───────────────────────────────────────────────
