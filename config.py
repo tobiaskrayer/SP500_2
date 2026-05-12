@@ -53,6 +53,16 @@ EXITS = {
     "sell_signals": 3,             # Ab X aktiven Signalen → "Verkaufen erwägen"
 }
 
+# --- Erwartetes Upside (separate Magnitude-Kennzahl) ---
+UPSIDE = {
+    "weight_atr":    0.40,   # Gewicht: ATR-basiertes Kursziel (3*ATR/Kurs)
+    "weight_52w":    0.40,   # Gewicht: Distanz zum 52-Wochen-Hoch
+    "weight_growth": 0.20,   # Gewicht: Umsatz-/Gewinnwachstum (fundamental)
+    "threshold_high": 15.0,  # expected_upside_pct ≥ 15% → "Hoch"
+    "threshold_mid":   7.0,  # expected_upside_pct ≥  7% → "Mittel"
+    # darunter → "Gering"
+}
+
 # --- Cache ---
 CACHE = {
     "dir": "cache",

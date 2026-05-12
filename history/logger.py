@@ -68,6 +68,7 @@ def _extract_recommendation(r: dict) -> dict:
         "sector": metrics.get("sector"),
     }
 
+    upside = r.get("upside") or {}
     return {
         "ticker": r.get("ticker"),
         "sector": r.get("sector") or metrics.get("sector"),
@@ -82,6 +83,8 @@ def _extract_recommendation(r: dict) -> dict:
         "metrics": raw_metrics,
         "rs_3m": rs.get("rs_3m"),
         "rs_6m": rs.get("rs_6m"),
+        "upside_pct": upside.get("expected_upside_pct"),
+        "upside_label": upside.get("upside_label"),
     }
 
 

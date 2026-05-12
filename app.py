@@ -290,15 +290,25 @@ def page_recommendations(result: dict | None):
         )
         return
 
-    # Sortierung nach combined_score (Strong Buy zuerst)
-    # Falls Score im Cache fehlt, aus tech/fund-Score nachberechnen
+    # Sortierung — Falls Score im Cache fehlt, on-the-fly nachberechnen
     from analyzer.confidence import compute_confidence
     for r in recommendations:
         if not r.get("combined_score") and (r.get("tech", {}).get("score") or r.get("fund", {}).get("score")):
             conf = compute_confidence(r.get("tech", {}).get("score", 0), r.get("fund", {}).get("score", 0), r.get("rs") or {})
             r["combined_score"] = conf["combined_score"]
             r["confidence_label"] = conf["confidence_label"]
-    recommendations_sorted = sorted(recommendations, key=lambda x: x.get("combined_score", 0), reverse=True)
+
+    sort_options = {
+        "Konfidenz (Standard)": lambda x: x.get("combined_score", 0),
+        "Upside": lambda x: (x.get("upside") or {}).get("expected_upside_pct") or 0,
+        "Konfidenz × Upside": lambda x: x.get("combined_score", 0) * ((x.get("upside") or {}).get("expected_upside_pct") or 0),
+    }
+    sort_choice = st.selectbox(
+        "Sortieren nach", list(sort_options.keys()), key="rec_sort_order"
+    )
+    recommendations_sorted = sorted(
+        recommendations, key=sort_options[sort_choice], reverse=True
+    )
 
     st.success(f"{len(recommendations_sorted)} Kaufempfehlung{'en' if len(recommendations_sorted) > 1 else ''} gefunden", icon="✅")
     st.divider()
@@ -338,15 +348,25 @@ def _render_stock_card(stock: dict):
     _CONF_COLORS = {"Strong Buy": "🟢", "Moderate Buy": "🟡", "Watch": "🔵"}
     conf_icon = _CONF_COLORS.get(confidence_label, "")
 
+    upside = stock.get("upside") or {}
+    upside_pct = upside.get("expected_upside_pct")
+    upside_label = upside.get("upside_label", "")
+    _UPSIDE_ICONS = {"Hoch": "⬆️", "Mittel": "➡️", "Gering": "⬇️"}
+    upside_icon = _UPSIDE_ICONS.get(upside_label, "")
+    upside_str = (
+        f"  |  {upside_icon} Upside: +{upside_pct:.1f}% ({upside_label})"
+        if upside_pct is not None else ""
+    )
+
     header = (
-        f"**{ticker}** — {name}  |  {sector}  |  ${price:.2f}  |  {conf_icon} {confidence_label}"
+        f"**{ticker}** — {name}  |  {sector}  |  ${price:.2f}  |  {conf_icon} {confidence_label}{upside_str}"
         if price else
-        f"**{ticker}** — {name}  |  {conf_icon} {confidence_label}"
+        f"**{ticker}** — {name}  |  {conf_icon} {confidence_label}{upside_str}"
     )
 
     with st.expander(header, expanded=False):
 
-        # Konfidenz-Banner
+        # Konfidenz + Upside Banner
         col_conf1, col_conf2 = st.columns([3, 1])
         with col_conf1:
             st.progress(combined_score, text=f"Konfidenz-Score: {combined_score*100:.0f}% — {confidence_label}")
@@ -355,6 +375,28 @@ def _render_stock_card(stock: dict):
             rec = exits.get("recommendation", "Halten")
             rec_colors = {"Halten": "✅", "Beobachten": "⚠️", "Verkaufen erwägen": "🚫"}
             st.write(f"Exit: {rec_colors.get(rec, '')} **{rec}**")
+
+        # Upside-Block
+        if upside_pct is not None:
+            col_u1, col_u2, col_u3, col_u4 = st.columns(4)
+            with col_u1:
+                st.metric(
+                    "Erwartetes Upside",
+                    f"+{upside_pct:.1f}%",
+                    help="Gewichteter Mittelwert aus ATR-Kursziel, Distanz zum 52-Wochen-Hoch und Wachstumserwartung.",
+                )
+            with col_u2:
+                atr_pct = upside.get("upside_atr_pct")
+                st.metric("ATR-Kursziel", f"+{atr_pct:.1f}%" if atr_pct is not None else "—",
+                          help="3 × ATR(14) / aktueller Kurs — technisches Take-Profit-Potential.")
+            with col_u3:
+                w52_pct = upside.get("upside_52w_pct")
+                st.metric("Distanz 52w-Hoch", f"+{w52_pct:.1f}%" if w52_pct is not None else "—",
+                          help="Wie weit ist der Kurs noch vom 52-Wochen-Hoch entfernt.")
+            with col_u4:
+                gr_pct = upside.get("upside_growth_pct")
+                st.metric("Wachstum", f"+{gr_pct:.1f}%" if gr_pct is not None else "—",
+                          help="Durchschnitt aus Umsatz- und Gewinnwachstum (fundamental).")
 
         st.divider()
 
@@ -805,8 +847,9 @@ def page_performance():
     st.divider()
 
     # ── Analyse-Tabs ──────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊 Konfidenz-Kalibrierung",
+        "⬆️ Upside-Validierung",
         "🔬 Signal-Wirksamkeit",
         "🏭 Sektoren",
         "📈 Alle Empfehlungen",
@@ -817,22 +860,25 @@ def page_performance():
         _render_confidence_chart(ana.by_confidence(enriched))
 
     with tab2:
+        _render_upside_chart(ana.by_upside_label(enriched))
+
+    with tab3:
         st.subheader("Technische Signale")
         _render_signal_table(ana.signal_effectiveness(enriched, "tech"))
         st.subheader("Fundamentals-Signale")
         _render_signal_table(ana.signal_effectiveness(enriched, "fund"))
 
-    with tab3:
+    with tab4:
         col_a, col_b = st.columns(2)
         with col_a:
             _render_sector_chart(ana.by_sector(enriched))
         with col_b:
             _render_vix_chart(ana.by_vix(enriched))
 
-    with tab4:
+    with tab5:
         _render_all_recommendations_table(enriched)
 
-    with tab5:
+    with tab6:
         _render_export_section(enriched, generate_markdown_report, generate_json_export)
 
 
@@ -882,6 +928,62 @@ def _render_confidence_chart(conf_data: list[dict]):
         margin=dict(l=0, r=0, t=50, b=0),
     )
     st.plotly_chart(fig2, use_container_width=True)
+
+
+def _render_upside_chart(upside_data: list[dict]):
+    if not upside_data:
+        st.info(
+            "Noch keine auswertbaren Daten. Das Upside-Label wird erst ab dem nächsten Scan gespeichert "
+            "(ältere Log-Einträge haben kein Upside-Label)."
+        )
+        return
+
+    import plotly.graph_objects as go
+
+    labels = [u["label"] for u in upside_data]
+    hit_rates = [u["hit_rate"] for u in upside_data]
+    avg_perfs = [u["avg_perf"] for u in upside_data]
+    ns = [u["n"] for u in upside_data]
+
+    colors = {"Hoch": "#4CAF50", "Mittel": "#FF9800", "Gering": "#9E9E9E", "Unbekannt": "#607D8B"}
+    bar_colors = [colors.get(l, "#9E9E9E") for l in labels]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="Trefferquote %",
+        x=labels, y=hit_rates,
+        marker_color=bar_colors, opacity=0.85,
+        text=[f"{v:.0f}% (n={n})" for v, n in zip(hit_rates, ns)],
+        textposition="outside",
+    ))
+    fig.add_hline(y=50, line_dash="dash", line_color="gray", annotation_text="50% Break-Even")
+    fig.update_layout(
+        title="Trefferquote je Upside-Label (1M positiv)",
+        yaxis_title="Trefferquote %", height=350,
+        margin=dict(l=0, r=0, t=50, b=0),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(
+        name="Ø Performance 1M",
+        x=labels, y=avg_perfs,
+        marker_color=[c if p >= 0 else "#F44336" for c, p in zip(bar_colors, avg_perfs)],
+        text=[f"{v:+.1f}%" for v in avg_perfs],
+        textposition="outside",
+    ))
+    fig2.add_hline(y=0, line_color="gray")
+    fig2.update_layout(
+        title="Ø Performance 1M je Upside-Label",
+        yaxis_title="Performance %", height=300,
+        margin=dict(l=0, r=0, t=50, b=0),
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    st.caption(
+        "Wenn 'Hoch' nicht deutlich besser abschneidet als 'Gering', "
+        "können die Gewichte in `config.UPSIDE` angepasst werden."
+    )
 
 
 def _render_signal_table(sig_data: list[dict]):

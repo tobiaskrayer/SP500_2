@@ -142,6 +142,32 @@ def by_vix(recs: list[dict]) -> list[dict]:
     return result
 
 
+def by_upside_label(recs: list[dict]) -> list[dict]:
+    """Hit-Rate und Ø Performance je Upside-Label."""
+    groups = defaultdict(list)
+    for r in recs:
+        if r.get("performance_1m") is not None:
+            label = r.get("upside_label") or "Unbekannt"
+            groups[label].append(r)
+
+    result = []
+    for label in ["Hoch", "Mittel", "Gering", "Unbekannt"]:
+        grp = groups.get(label, [])
+        if not grp:
+            continue
+        hits = sum(1 for r in grp if r.get("hit_1m"))
+        perfs = [r["performance_1m"] for r in grp]
+        vs_spy = [r["perf_vs_spy_1m"] for r in grp if r.get("perf_vs_spy_1m") is not None]
+        result.append({
+            "label": label,
+            "n": len(grp),
+            "hit_rate": round(hits / len(grp) * 100, 1),
+            "avg_perf": round(sum(perfs) / len(perfs), 2),
+            "avg_vs_spy": round(sum(vs_spy) / len(vs_spy), 2) if vs_spy else None,
+        })
+    return result
+
+
 def worst_recommendations(recs: list[dict], n: int = 10) -> list[dict]:
     """Die n schlechtesten Empfehlungen mit vollständigem Signal-Pattern."""
     measurable = [r for r in recs if r.get("performance_1m") is not None]

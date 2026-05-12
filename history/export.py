@@ -9,6 +9,7 @@ from datetime import date
 from history.analytics import (
     summary_stats, by_confidence, signal_effectiveness,
     by_sector, by_vix, worst_recommendations, best_recommendations,
+    by_upside_label,
 )
 
 
@@ -20,6 +21,7 @@ def generate_markdown_report(enriched_recs: list[dict]) -> str:
     today = str(date.today())
     stats = summary_stats(enriched_recs)
     conf_data = by_confidence(enriched_recs)
+    upside_data = by_upside_label(enriched_recs)
     tech_sigs = signal_effectiveness(enriched_recs, "tech")
     fund_sigs = signal_effectiveness(enriched_recs, "fund")
     sectors = by_sector(enriched_recs)
@@ -73,6 +75,24 @@ def generate_markdown_report(enriched_recs: list[dict]) -> str:
     lines += [
         "",
         "**Interpretation:** Wenn 'Strong Buy' nicht besser performt als 'Moderate Buy', sind die Konfidenz-Schwellen (aktuell: Strong ≥ 85%, Moderate ≥ 70%) zu überdenken.",
+        "", "---", "",
+    ]
+
+    # Upside-Validierung
+    lines += ["## 2b. Upside-Validierung", ""]
+    lines.append("Validiert, ob das berechnete erwartete Upside (ATR + 52w-Hoch + Wachstum) mit der tatsächlichen Performance korreliert.")
+    lines.append("")
+    if upside_data:
+        lines.append("| Upside-Label | n | Hit-Rate | Ø Perf 1M | vs SPY |")
+        lines.append("|---|---|---|---|---|")
+        for u in upside_data:
+            vs = f"{u['avg_vs_spy']:+.1f}%" if u.get("avg_vs_spy") is not None else "N/A"
+            lines.append(f"| {u['label']} | {u['n']} | {u['hit_rate']}% | {u['avg_perf']:+.1f}% | {vs} |")
+    else:
+        lines.append("_Noch keine auswertbaren Daten._")
+    lines += [
+        "",
+        "**Interpretation:** Wenn 'Hoch' nicht deutlich besser performt als 'Gering', sollten die Gewichte in `config.UPSIDE` angepasst werden.",
         "", "---", "",
     ]
 
@@ -204,8 +224,9 @@ def generate_markdown_report(enriched_recs: list[dict]) -> str:
         "2. **Signal-Wirksamkeit:** Welche Tech- und Fund-Signale haben ein negatives oder schwaches Delta und könnten angepasst oder entfernt werden?",
         "3. **Sektor-Bias:** Gibt es Sektoren, die systematisch schlecht performen und aus dem Universum ausgeschlossen werden sollten?",
         "4. **Markt-Filter:** Zeigen die VIX-Daten, dass die aktuelle `vix_stop`-Schwelle (25) zu hoch oder zu niedrig ist?",
-        "5. **Konservativität:** Sind die Gate-Schwellen (`min_score` für Tech ≥70%, Fundamentals ≥60%) angemessen — oder sollten sie verschärft oder gelockert werden?",
-        "6. **Sonstige Verbesserungen:** Was fällt dir in den Daten noch auf, das auf eine systematische Schwäche hindeutet?",
+        "5. **Upside-Kalibrierung:** Korreliert das berechnete erwartete Upside ('Hoch'/'Mittel'/'Gering') mit der tatsächlichen Performance? Welche Gewichte in `config.UPSIDE` wären besser?",
+        "6. **Konservativität:** Sind die Gate-Schwellen (`min_score` für Tech ≥70%, Fundamentals ≥60%) angemessen — oder sollten sie verschärft oder gelockert werden?",
+        "7. **Sonstige Verbesserungen:** Was fällt dir in den Daten noch auf, das auf eine systematische Schwäche hindeutet?",
         "",
         "Bitte gib **konkrete Vorschläge** in Form von geänderten `config.py`-Werten oder Code-Änderungen.",
     ]
