@@ -116,11 +116,23 @@ def get_portfolio_history(positions: list[dict]) -> dict | None:
         if len(daily_values) < 2:
             return None
 
-        # Normalisieren auf 100
-        base = daily_values[0]
-        portfolio_indexed = [round(v / base * 100, 2) for v in daily_values]
+        # Normalisierung: Portfolio-Wert / investiertes Kapital bis zu diesem Tag × 100
+        # Vermeidet den Fehler, dass neue Käufe als "Gewinn" gewertet werden
+        def _invested_on(d_str: str) -> float:
+            total = 0.0
+            for pos in positions:
+                for lot in pos.get("lots", []):
+                    if lot["date"] <= d_str:
+                        total += float(lot["shares"]) * float(lot["price_eur"])
+            return total
 
-        # SPY normalisieren auf gleichen Startpunkt
+        total_invested = _invested_on(dates_out[-1])
+        portfolio_indexed = []
+        for v, d in zip(daily_values, dates_out):
+            invested = _invested_on(d)
+            portfolio_indexed.append(round(v / invested * 100, 2) if invested > 0 else 100.0)
+
+        # SPY normalisieren auf 100 ab erstem Kaufdatum
         spy_indexed = None
         if spy_series is not None:
             spy_dates = [pd.Timestamp(d) for d in dates_out]
@@ -133,14 +145,15 @@ def get_portfolio_history(positions: list[dict]) -> dict | None:
                     for v in spy_vals
                 ]
 
-        # KPIs
-        total_return = round((daily_values[-1] / base - 1) * 100, 2)
+        # KPIs: Gesamtrendite = (aktueller Wert / investiertes Kapital - 1) × 100
+        total_return = round((daily_values[-1] / total_invested - 1) * 100, 2) if total_invested > 0 else 0.0
         max_dd = _max_drawdown(portfolio_indexed)
 
         vs_spy = None
         if spy_indexed:
             last_spy = next((v for v in reversed(spy_indexed) if v is not None), None)
             if last_spy:
+                # Portfolio-Index vs. SPY-Index (beide starten bei 100)
                 vs_spy = round(portfolio_indexed[-1] - last_spy, 2)
 
         result = {
