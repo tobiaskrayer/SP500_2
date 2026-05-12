@@ -147,6 +147,7 @@ def get_portfolio_history(positions: list[dict]) -> dict | None:
 
         # KPIs: Gesamtrendite = (aktueller Wert / investiertes Kapital - 1) × 100
         total_return = round((daily_values[-1] / total_invested - 1) * 100, 2) if total_invested > 0 else 0.0
+        unrealized_pnl_eur = round(daily_values[-1] - total_invested, 2)
         max_dd = _max_drawdown(portfolio_indexed)
 
         vs_spy = None
@@ -163,6 +164,7 @@ def get_portfolio_history(positions: list[dict]) -> dict | None:
             "spy_indexed": spy_indexed,
             "start_date": dates_out[0],
             "total_return_pct": total_return,
+            "unrealized_pnl_eur": unrealized_pnl_eur,
             "vs_spy_pct": vs_spy,
             "max_drawdown_pct": max_dd,
         }

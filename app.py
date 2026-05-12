@@ -966,13 +966,38 @@ def page_portfolio():
             if not hist_data:
                 st.info("Nicht genug Kursdaten (mindestens 3 Tage Haltedauer nötig).")
             else:
-                kp1, kp2, kp3 = st.columns(3)
-                kp1.metric("Gesamtrendite", f"{hist_data['total_return_pct']:+.1f}%",
-                           delta_color="normal" if hist_data["total_return_pct"] >= 0 else "inverse")
+                realized_pnl = sum(r.get("pnl_eur", 0) or 0 for r in realized)
+                unrealized_pnl = hist_data.get("unrealized_pnl_eur", 0) or 0
+                total_pnl_eur = round(unrealized_pnl + realized_pnl, 2)
+
+                kp1, kp2, kp3, kp4 = st.columns(4)
+                kp1.metric(
+                    "Gesamtrendite (offen)",
+                    f"{hist_data['total_return_pct']:+.1f}%",
+                    delta=f"€{unrealized_pnl:+,.2f}",
+                    delta_color="normal" if unrealized_pnl >= 0 else "inverse",
+                    help="Offene Positionen: aktueller Wert minus eingesetztes Kapital.",
+                )
+                kp2.metric(
+                    "Realisiert",
+                    f"€{realized_pnl:+,.2f}",
+                    delta=f"{len(realized)} Trade{'s' if len(realized) != 1 else ''}",
+                    delta_color="normal" if realized_pnl >= 0 else "inverse",
+                    help="Summe aller abgeschlossenen Verkäufe.",
+                )
+                kp3.metric(
+                    "Gesamt P&L",
+                    f"€{total_pnl_eur:+,.2f}",
+                    help="Offene Positionen + realisierte Trades zusammen.",
+                    delta_color="normal" if total_pnl_eur >= 0 else "inverse",
+                )
                 if hist_data.get("vs_spy_pct") is not None:
-                    kp2.metric("vs. SPY", f"{hist_data['vs_spy_pct']:+.1f}%",
+                    kp4.metric("vs. SPY", f"{hist_data['vs_spy_pct']:+.1f}%",
                                delta_color="normal" if hist_data["vs_spy_pct"] >= 0 else "inverse")
-                kp3.metric("Max. Drawdown", f"{hist_data['max_drawdown_pct']:.1f}%", delta_color="inverse")
+                else:
+                    kp4.metric("Max. Drawdown", f"{hist_data['max_drawdown_pct']:.1f}%", delta_color="inverse")
+
+                st.caption(f"Max. Drawdown: {hist_data['max_drawdown_pct']:.1f}%")
 
                 fig_perf = go.Figure()
                 fig_perf.add_trace(go.Scatter(
