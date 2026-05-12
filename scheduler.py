@@ -114,6 +114,12 @@ def trigger_scan_background(on_complete=None):
             logger.info("Hintergrund-Scan gestartet")
             result = run_full_scan()
             save_cache(result)
+            # Empfehlungen für Performance-Tracking historisieren
+            try:
+                from history.logger import append_scan_result
+                append_scan_result(result)
+            except Exception as hist_err:
+                logger.warning(f"History-Logging fehlgeschlagen: {hist_err}")
             if on_complete:
                 on_complete(result)
         except Exception as e:

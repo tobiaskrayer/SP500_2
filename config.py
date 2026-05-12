@@ -36,6 +36,23 @@ FUNDAMENTAL = {
     "min_score": 0.60,          # Mindest-Score für Gate 4 (60%)
 }
 
+# --- Konfidenz-Ranking ---
+CONFIDENCE = {
+    "strong_buy_threshold": 0.85,   # combined_score ≥ 0.85 → "Strong Buy"
+    "moderate_buy_threshold": 0.70, # combined_score ≥ 0.70 → "Moderate Buy"
+    # darunter (aber alle Gates bestanden) → "Watch"
+}
+
+# --- Exit-Signale ---
+EXITS = {
+    "atr_stop_multiplier": 2.0,    # Stop-Loss = entry - 2 * ATR(14)
+    "atr_target_multiplier": 3.0,  # Take-Profit = entry + 3 * ATR(14) (Risk/Reward 1:1.5)
+    "rsi_overbought": 75,          # RSI-Grenze für Exit-Signal
+    "bb_exit_pct": 0.95,           # Kurs ≥ 95% BB-Band → Exit-Signal
+    "warn_signals": 1,             # Ab X aktiven Signalen → "Beobachten"
+    "sell_signals": 3,             # Ab X aktiven Signalen → "Verkaufen erwägen"
+}
+
 # --- Cache ---
 CACHE = {
     "dir": "cache",

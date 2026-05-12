@@ -60,7 +60,7 @@ def render_sidebar():
 
         page = st.radio(
             "Navigation",
-            ["Marktübersicht", "Empfehlungen", "Vollständiger Scan"],
+            ["Marktübersicht", "Empfehlungen", "Mein Portfolio", "Performance", "Vollständiger Scan"],
             index=0,
         )
 
@@ -288,10 +288,13 @@ def page_recommendations(result: dict | None):
         )
         return
 
-    st.success(f"{len(recommendations)} Kaufempfehlung{'en' if len(recommendations) > 1 else ''} gefunden", icon="✅")
+    # Sortierung nach combined_score (Strong Buy zuerst)
+    recommendations_sorted = sorted(recommendations, key=lambda x: x.get("combined_score", 0), reverse=True)
+
+    st.success(f"{len(recommendations_sorted)} Kaufempfehlung{'en' if len(recommendations_sorted) > 1 else ''} gefunden", icon="✅")
     st.divider()
 
-    for stock in recommendations:
+    for stock in recommendations_sorted:
         _render_stock_card(stock)
 
 
@@ -315,7 +318,30 @@ def _render_stock_card(stock: dict):
     tech = stock.get("tech", {})
     fund = stock.get("fund", {})
 
-    with st.expander(f"**{ticker}** — {name}  |  {sector}  |  ${price:.2f}" if price else f"**{ticker}** — {name}", expanded=False):
+    confidence_label = stock.get("confidence_label", "")
+    combined_score = stock.get("combined_score", 0)
+    _CONF_COLORS = {"Strong Buy": "🟢", "Moderate Buy": "🟡", "Watch": "🔵"}
+    conf_icon = _CONF_COLORS.get(confidence_label, "")
+
+    header = (
+        f"**{ticker}** — {name}  |  {sector}  |  ${price:.2f}  |  {conf_icon} {confidence_label}"
+        if price else
+        f"**{ticker}** — {name}  |  {conf_icon} {confidence_label}"
+    )
+
+    with st.expander(header, expanded=False):
+
+        # Konfidenz-Banner
+        col_conf1, col_conf2 = st.columns([3, 1])
+        with col_conf1:
+            st.progress(combined_score, text=f"Konfidenz-Score: {combined_score*100:.0f}% — {confidence_label}")
+        with col_conf2:
+            exits = stock.get("exits", {})
+            rec = exits.get("recommendation", "Halten")
+            rec_colors = {"Halten": "✅", "Beobachten": "⚠️", "Verkaufen erwägen": "🚫"}
+            st.write(f"Exit: {rec_colors.get(rec, '')} **{rec}**")
+
+        st.divider()
 
         # Gate-Übersicht
         col1, col2, col3, col4 = st.columns(4)
@@ -332,7 +358,7 @@ def _render_stock_card(stock: dict):
 
         st.divider()
 
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 Charts", "📊 Technische Signale", "📋 Fundamentaldaten", "↗️ Relative Stärke"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Charts", "📊 Technische Signale", "📋 Fundamentaldaten", "↗️ Relative Stärke", "⛔ Exit-Signale"])
 
         with tab1:
             hist = stock.get("hist")
@@ -347,6 +373,9 @@ def _render_stock_card(stock: dict):
 
         with tab4:
             _render_relative_strength(rs)
+
+        with tab5:
+            _render_exit_signals(exits)
 
 
 def _render_stock_charts(ticker: str, hist, tech: dict):
@@ -553,6 +582,228 @@ def page_full_scan(result: dict | None):
     st.dataframe(filtered, use_container_width=True, hide_index=True)
 
 
+# ── Exit-Signal-Anzeige ───────────────────────────────────────────────────────
+
+def _render_exit_signals(exits: dict, entry_price: float = None):
+    if not exits or exits.get("recommendation") == "Keine Daten":
+        st.info("Keine Exit-Daten verfügbar (zu wenig Kurshistorie).")
+        return
+
+    rec = exits.get("recommendation", "Halten")
+    rec_map = {
+        "Halten": ("success", "✅ Halten — keine kritischen Exit-Signale"),
+        "Beobachten": ("warning", "⚠️ Beobachten — erste Exit-Signale aktiv"),
+        "Verkaufen erwägen": ("error", "🚫 Verkaufen erwägen — mehrere Exit-Signale aktiv"),
+    }
+    fn_name, msg = rec_map.get(rec, ("info", rec))
+    getattr(st, fn_name)(msg)
+
+    st.divider()
+    col1, col2, col3 = st.columns(3)
+    atr = exits.get("atr")
+    sl = exits.get("stop_loss")
+    tp = exits.get("take_profit")
+    with col1:
+        ep_str = f"${entry_price:.2f}" if entry_price else "Kaufkurs"
+        st.metric("Einstieg", ep_str)
+    with col2:
+        st.metric("Stop-Loss (ATR×2)", f"${sl:.2f}" if sl is not None else "N/A",
+                  delta=f"-{abs(sl - entry_price):.2f}" if sl is not None and entry_price else None,
+                  delta_color="inverse")
+    with col3:
+        st.metric("Take-Profit (ATR×3)", f"${tp:.2f}" if tp is not None else "N/A",
+                  delta=f"+{abs(tp - entry_price):.2f}" if tp is not None and entry_price else None,
+                  delta_color="normal")
+
+    if atr:
+        st.caption(f"ATR(14): {atr:.2f}")
+
+    st.divider()
+    signals = exits.get("signals", {})
+    if signals:
+        st.write("**Aktive Exit-Signale:**")
+        for signal, active in signals.items():
+            icon = "🔴" if active else "🟢"
+            st.write(f"{icon} {signal}")
+
+
+# ── Seite: Mein Portfolio ─────────────────────────────────────────────────────
+
+def page_portfolio():
+    st.header("Mein Portfolio")
+    st.caption("Eigene Käufe überwachen — mit Exit-Empfehlung")
+
+    from portfolio.manager import load_portfolio, add_position, remove_position, evaluate_positions
+
+    # Positionen auswerten
+    with st.spinner("Lade aktuelle Kurse..."):
+        positions = evaluate_positions()
+
+    if not positions:
+        st.info("Noch keine Positionen eingetragen. Füge deine erste Position unten hinzu.")
+    else:
+        # Übersichtstabelle
+        rows = []
+        for p in positions:
+            exits = p.get("exits", {})
+            rec = exits.get("recommendation", "—")
+            rec_icon = {"Halten": "✅", "Beobachten": "⚠️", "Verkaufen erwägen": "🚫"}.get(rec, "—")
+            rows.append({
+                "Ticker": p["ticker"],
+                "Einstieg": f"${p['entry_price']:.2f}",
+                "Datum": p["entry_date"],
+                "Tage": p["days_held"] if p["days_held"] is not None else "—",
+                "Kurs aktuell": f"${p['current_price']:.2f}" if p["current_price"] else "N/A",
+                "P&L %": f"{p['pnl_pct']:+.1f}%" if p["pnl_pct"] is not None else "N/A",
+                "P&L €/$": f"{p['pnl_abs']:+.2f}" if p["pnl_abs"] is not None else "N/A",
+                "Signale": exits.get("signal_count", 0),
+                "Empfehlung": f"{rec_icon} {rec}",
+            })
+
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.divider()
+
+        # Detail-Expander pro Position
+        for i, p in enumerate(positions):
+            exits = p.get("exits", {})
+            rec = exits.get("recommendation", "—")
+            with st.expander(f"**{p['ticker']}** — Details & Exit-Signale", expanded=False):
+                _render_exit_signals(exits, entry_price=p["entry_price"])
+                st.divider()
+                if st.button(f"Position entfernen ({p['ticker']})", key=f"remove_{i}", type="secondary"):
+                    remove_position(i)
+                    st.rerun()
+
+    st.divider()
+    st.subheader("Position hinzufügen")
+    with st.form("add_position_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            ticker_in = st.text_input("Ticker (z.B. AAPL)", max_chars=10)
+            price_in = st.number_input("Kaufkurs ($)", min_value=0.01, step=0.01, format="%.2f")
+        with col2:
+            date_in = st.date_input("Kaufdatum", value=datetime.today())
+            shares_in = st.number_input("Anzahl Aktien", min_value=0.01, step=1.0, format="%.2f")
+        notes_in = st.text_input("Notiz (optional)", max_chars=200)
+        submitted = st.form_submit_button("Position speichern", type="primary")
+        if submitted:
+            if ticker_in and price_in > 0 and shares_in > 0:
+                add_position(ticker_in, str(date_in), price_in, shares_in, notes_in)
+                st.success(f"{ticker_in.upper()} hinzugefügt!")
+                st.rerun()
+            else:
+                st.error("Bitte Ticker, Kaufkurs und Anzahl angeben.")
+
+
+# ── Seite: Performance-Tracking ───────────────────────────────────────────────
+
+def page_performance():
+    st.header("Performance historischer Empfehlungen")
+    st.caption("Wie gut haben die Empfehlungen der letzten Monate abgeschnitten?")
+
+    from history.logger import load_log
+    import yfinance as yf
+
+    log = load_log()
+    if not log:
+        st.info(
+            "Noch keine historischen Empfehlungen gespeichert.\n\n"
+            "Nach dem nächsten Scan werden die Empfehlungen automatisch archiviert."
+        )
+        return
+
+    # Auswertung: aktuelle Kurse für alle historischen Empfehlungen laden
+    all_recs = []
+    for entry in log:
+        for r in entry.get("recommendations", []):
+            all_recs.append({
+                "date": entry["date"],
+                "ticker": r["ticker"],
+                "entry_price": r.get("price"),
+                "confidence_label": r.get("confidence_label", "—"),
+                "combined_score": r.get("combined_score"),
+            })
+
+    if not all_recs:
+        st.info("Keine Empfehlungen in der Historie gefunden.")
+        return
+
+    # Aktuelle Kurse für alle Ticker laden (gecacht)
+    tickers_unique = list({r["ticker"] for r in all_recs if r["entry_price"]})
+    current_prices = {}
+    if tickers_unique:
+        with st.spinner("Lade aktuelle Kurse für Performance-Berechnung..."):
+            for t in tickers_unique:
+                try:
+                    h = yf.Ticker(t).history(period="5d")
+                    if h is not None and len(h) > 0:
+                        current_prices[t] = float(h["Close"].iloc[-1])
+                except Exception:
+                    pass
+
+    rows = []
+    for r in all_recs:
+        entry_price = r["entry_price"]
+        cp = current_prices.get(r["ticker"])
+        pnl_pct = round((cp / entry_price - 1) * 100, 2) if cp and entry_price else None
+        rows.append({
+            "Datum": r["date"],
+            "Ticker": r["ticker"],
+            "Konfidenz": r["confidence_label"],
+            "Score": f"{r['combined_score']*100:.0f}%" if r["combined_score"] else "—",
+            "Einstieg": f"${entry_price:.2f}" if entry_price else "—",
+            "Aktuell": f"${cp:.2f}" if cp else "N/A",
+            "Performance": f"{pnl_pct:+.1f}%" if pnl_pct is not None else "N/A",
+            "Positiv": pnl_pct is not None and pnl_pct > 0,
+        })
+
+    df = pd.DataFrame(rows)
+
+    # Aggregierte Statistik
+    perf_known = [r for r in rows if r["Performance"] != "N/A"]
+    if perf_known:
+        positive = sum(1 for r in perf_known if r["Positiv"])
+        hit_rate = positive / len(perf_known) * 100
+        avg_perf = sum(float(r["Performance"].replace("%", "")) for r in perf_known) / len(perf_known)
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Empfehlungen gesamt", len(perf_known))
+        with col2:
+            st.metric("Trefferquote (positiv)", f"{hit_rate:.0f}%",
+                      delta_color="normal" if hit_rate >= 50 else "inverse")
+        with col3:
+            st.metric("Ø Performance", f"{avg_perf:+.1f}%",
+                      delta_color="normal" if avg_perf >= 0 else "inverse")
+        with col4:
+            best = max(perf_known, key=lambda r: float(r["Performance"].replace("%", "")))
+            st.metric("Beste Empfehlung", best["Ticker"], delta=best["Performance"])
+
+        st.divider()
+
+    # Filter
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        labels = ["Alle"] + sorted(df["Konfidenz"].unique().tolist())
+        selected_label = st.selectbox("Konfidenz filtern", labels)
+    with col2:
+        only_positive = st.checkbox("Nur positive Empfehlungen")
+
+    filtered = df.copy()
+    if selected_label != "Alle":
+        filtered = filtered[filtered["Konfidenz"] == selected_label]
+    if only_positive:
+        filtered = filtered[filtered["Positiv"] == True]
+
+    st.caption(f"{len(filtered)} Einträge")
+    st.dataframe(
+        filtered.drop(columns=["Positiv"]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
 # ── Hauptschleife ─────────────────────────────────────────────────────────────
 
 def main():
@@ -564,6 +815,10 @@ def main():
         page_market_overview(result)
     elif page == "Empfehlungen":
         page_recommendations(result)
+    elif page == "Mein Portfolio":
+        page_portfolio()
+    elif page == "Performance":
+        page_performance()
     elif page == "Vollständiger Scan":
         page_full_scan(result)
 

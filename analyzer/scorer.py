@@ -16,6 +16,8 @@ from analyzer.market_filter import check_market
 from analyzer.relative_strength import check_relative_strength
 from analyzer.technical import check_technical
 from analyzer.fundamental import check_fundamental
+from analyzer.confidence import compute_confidence
+from analyzer.exits import compute_exits
 from config import ANALYSIS
 
 logger = logging.getLogger(__name__)
@@ -133,6 +135,23 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series) -> dict | None:
 
         recommended = rs["passed"] and tech["passed"] and fund["passed"]
 
+        # Additiv: Konfidenz-Ranking (ändert recommended nicht)
+        confidence = compute_confidence(tech["score"], fund["score"], rs)
+
+        # Additiv: Exit-Signale (RS-6M-Negativ-Signal nachträglich setzen)
+        exits = compute_exits(hist, entry_price=tech["indicators"].get("price") if tech["indicators"] else None)
+        if exits["signals"]:
+            rs_6m = rs.get("rs_6m", 0) or 0
+            exits["signals"]["6M-Relative Stärke negativ"] = bool(rs_6m < 0)
+            exits["signal_count"] = sum(1 for v in exits["signals"].values() if v)
+            from config import EXITS as _EXITS
+            if exits["signal_count"] >= _EXITS["sell_signals"]:
+                exits["recommendation"] = "Verkaufen erwägen"
+            elif exits["signal_count"] >= _EXITS["warn_signals"]:
+                exits["recommendation"] = "Beobachten"
+            else:
+                exits["recommendation"] = "Halten"
+
         return {
             "ticker": ticker,
             "name": fund["metrics"].get("name", ticker),
@@ -145,6 +164,11 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series) -> dict | None:
             # Scores
             "tech_score": tech["score"],
             "fund_score": fund["score"],
+            # Konfidenz (additiv)
+            "combined_score": confidence["combined_score"],
+            "confidence_label": confidence["confidence_label"],
+            # Exit-Signale (additiv)
+            "exits": exits,
             # Detail-Daten (für Report)
             "rs": rs,
             "tech": tech,
