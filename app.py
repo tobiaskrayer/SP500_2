@@ -18,7 +18,7 @@ st.set_page_config(
     page_title="S&P500 Analyse",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ── Initialisierung ──────────────────────────────────────────────────────────
@@ -50,23 +50,51 @@ def init_app():
         st.session_state.scheduler_started = True
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# ── Navigation ────────────────────────────────────────────────────────────────
 
-def render_sidebar():
+_PAGES = ["Marktübersicht", "Empfehlungen", "Mein Portfolio", "Performance", "Vollständiger Scan"]
+_PAGE_ICONS = {
+    "Marktübersicht": "📊",
+    "Empfehlungen": "🎯",
+    "Mein Portfolio": "💼",
+    "Performance": "📈",
+    "Vollständiger Scan": "🔍",
+}
+_PAGE_LABELS = [f"{_PAGE_ICONS[p]} {p}" for p in _PAGES]
+
+
+def render_top_nav() -> str:
+    """Horizontale Top-Navigation (Pills). Funktioniert auf Handy ohne Sidebar-Fummelei."""
+    try:
+        choice = st.pills(
+            "Navigation",
+            _PAGE_LABELS,
+            default=_PAGE_LABELS[0],
+            label_visibility="collapsed",
+            key="top_nav",
+        )
+    except AttributeError:
+        # Fallback für ältere Streamlit-Versionen ohne st.pills
+        choice = st.radio(
+            "Navigation",
+            _PAGE_LABELS,
+            index=0,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="top_nav",
+        )
+    if choice is None:
+        choice = _PAGE_LABELS[0]
+    return _PAGES[_PAGE_LABELS.index(choice)]
+
+
+def render_sidebar_secondary():
+    """Sidebar: nur noch sekundäre Infos (Scan-Button lokal, Timestamp, Disclaimer)."""
     with st.sidebar:
         st.title("📈 S&P500 Analyse")
         st.caption("Sehr konservative Kaufempfehlungen")
         st.divider()
 
-        page = st.radio(
-            "Navigation",
-            ["Marktübersicht", "Empfehlungen", "Mein Portfolio", "Performance", "Vollständiger Scan"],
-            index=0,
-        )
-
-        st.divider()
-
-        # Scan-Button (nur lokal — auf Streamlit Cloud läuft GitHub Actions)
         import os
         on_cloud = bool(os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("IS_STREAMLIT_CLOUD"))
         if on_cloud:
@@ -84,7 +112,6 @@ def render_sidebar():
                 if st.button("Analyse neu starten", use_container_width=True, type="primary"):
                     _start_scan()
 
-        # Letzte Aktualisierung
         if st.session_state.scan_result:
             ts = st.session_state.scan_result.get("timestamp", "")
             if ts:
@@ -99,8 +126,6 @@ def render_sidebar():
         st.divider()
         st.caption("Datenquelle: Yahoo Finance (yfinance)")
         st.caption("Kein Anlageberater — nur zur Information")
-
-    return page
 
 
 def _start_scan():
@@ -1423,7 +1448,8 @@ def _render_export_section(enriched, generate_markdown_report, generate_json_exp
 
 def main():
     init_app()
-    page = render_sidebar()
+    render_sidebar_secondary()
+    page = render_top_nav()
     result = st.session_state.scan_result
 
     if page == "Marktübersicht":
