@@ -17,7 +17,7 @@ from analyzer.relative_strength import check_relative_strength
 from analyzer.technical import check_technical
 from analyzer.fundamental import check_fundamental
 from analyzer.confidence import compute_confidence
-from analyzer.exits import compute_exits
+from analyzer.exits import compute_exits, inject_external_signals
 from analyzer.upside import compute_upside
 from config import ANALYSIS
 
@@ -139,20 +139,16 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series) -> dict | None:
         # Additiv: Konfidenz-Ranking (ändert recommended nicht)
         confidence = compute_confidence(tech["score"], fund["score"], rs)
 
-        # Additiv: Exit-Signale (RS-6M-Negativ-Signal nachträglich setzen)
+        # Additiv: Exit-Signale (externe Signale nachträglich setzen)
         current_price = tech["indicators"].get("price") if tech["indicators"] else None
         exits = compute_exits(hist, entry_price=current_price)
         if exits["signals"]:
             rs_6m = rs.get("rs_6m", 0) or 0
-            exits["signals"]["6M-Rendite negativ"] = bool(rs_6m < 0)
-            exits["signal_count"] = sum(1 for v in exits["signals"].values() if v)
-            from config import EXITS as _EXITS
-            if exits["signal_count"] >= _EXITS["sell_signals"]:
-                exits["recommendation"] = "Verkaufen erwägen"
-            elif exits["signal_count"] >= _EXITS["warn_signals"]:
-                exits["recommendation"] = "Beobachten"
-            else:
-                exits["recommendation"] = "Halten"
+            market_bearish = not market.get("passed", True) or market.get("warning", False)
+            inject_external_signals(
+                exits,
+                **{"6M-Rendite negativ": rs_6m < 0, "Marktumfeld bearish": market_bearish},
+            )
 
         # Additiv: Erwartetes Upside
         upside = compute_upside(

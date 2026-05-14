@@ -34,7 +34,7 @@ import os
 from datetime import date, datetime
 import yfinance as yf
 
-from analyzer.exits import compute_exits
+from analyzer.exits import compute_exits, inject_external_signals
 
 PORTFOLIO_FILE = os.path.join(os.path.dirname(__file__), "..", "portfolio.json")
 
@@ -292,6 +292,15 @@ def evaluate_positions() -> list[dict]:
     data = load_portfolio()
     eurusd = get_eurusd_rate()
 
+    # Marktumfeld einmalig abrufen für alle Positionen
+    market_bearish = False
+    try:
+        from analyzer.market_filter import check_market
+        mkt = check_market()
+        market_bearish = not mkt.get("passed", True) or mkt.get("warning", False)
+    except Exception:
+        pass
+
     results = []
     for pos in data["positions"]:
         ticker = pos["ticker"]
@@ -314,6 +323,10 @@ def evaluate_positions() -> list[dict]:
                 if eurusd:
                     current_price_eur = round(current_price_usd / eurusd, 2)
                 exits = compute_exits(hist, entry_price=current_price_usd)
+                if exits["signals"]:
+                    inject_external_signals(
+                        exits, **{"Marktumfeld bearish": market_bearish}
+                    )
             if not sector:
                 try:
                     sector = stock.info.get("sector")

@@ -90,6 +90,9 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None) -> dict:
     # In scorer.py wird dieses Feld ggf. mit RS-Vergleich gegen S&P500 überschrieben
     signals["6M-Rendite negativ"] = _rs_negative_6m(close)
 
+    # 7. Marktumfeld bearish/warning — wird extern gesetzt (scorer.py / manager.py)
+    signals["Marktumfeld bearish"] = False
+
     signal_count = sum(1 for v in signals.values() if v)
 
     if signal_count >= EXITS["sell_signals"]:
@@ -107,6 +110,25 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None) -> dict:
         "signal_count": signal_count,
         "recommendation": recommendation,
     }
+
+
+def inject_external_signals(exits: dict, **signals: bool) -> dict:
+    """
+    Setzt externe Signale (RS, Markt) und berechnet signal_count + recommendation neu.
+    Gibt das exits-Dict zurück (in-place modifiziert).
+    """
+    if not exits.get("signals"):
+        return exits
+    for key, val in signals.items():
+        exits["signals"][key] = bool(val)
+    exits["signal_count"] = sum(1 for v in exits["signals"].values() if v)
+    if exits["signal_count"] >= EXITS["sell_signals"]:
+        exits["recommendation"] = "Verkaufen erwägen"
+    elif exits["signal_count"] >= EXITS["warn_signals"]:
+        exits["recommendation"] = "Beobachten"
+    else:
+        exits["recommendation"] = "Halten"
+    return exits
 
 
 def _empty_exits() -> dict:
