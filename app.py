@@ -65,29 +65,6 @@ _PAGE_LABELS = [f"{_PAGE_ICONS[p]} {p}" for p in _PAGES]
 
 def render_top_nav() -> str:
     """Horizontale Top-Navigation (Pills). Funktioniert auf Handy ohne Sidebar-Fummelei."""
-    # position:fixed damit die Leiste beim Scrollen immer oben bleibt.
-    # padding-top auf dem äußeren Block kompensiert den wegfallenden Platz.
-    st.markdown("""
-    <style>
-    /* Navigationsleiste fixiert direkt unterhalb des Streamlit-Headers */
-    [data-testid="stVerticalBlock"] > div:has([data-testid="stPills"]),
-    [data-testid="stVerticalBlock"] > div:has([data-testid="stRadio"]) {
-        position: fixed !important;
-        top: 3.75rem !important;
-        left: 0 !important;
-        right: 0 !important;
-        z-index: 9990 !important;
-        background-color: #0e1117 !important;
-        padding: 0.5rem 2rem !important;
-        border-bottom: 1px solid rgba(49, 51, 63, 0.6) !important;
-    }
-    /* Platz-Kompensation: verhindert, dass Content hinter die fixierte Leiste rutscht */
-    [data-testid="stVerticalBlock"]:has(> div > [data-testid="stPills"]),
-    [data-testid="stVerticalBlock"]:has(> div > [data-testid="stRadio"]) {
-        padding-top: 3.5rem !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
     try:
         choice = st.pills(
             "Navigation",
@@ -971,48 +948,47 @@ def page_portfolio():
 
                     st.divider()
 
-                    # Verkaufs-Form
-                    st.subheader("Verkauf nachtragen")
-                    st.caption("Das Verkaufsdatum kann auch in der Vergangenheit liegen — trage Verkäufe in Ruhe nach.")
-                    with st.form(f"sell_form_{p['ticker']}_{i}", clear_on_submit=True):
-                        total_s = p.get("total_shares", 0)
-                        sc1, sc2, sc3 = st.columns(3)
-                        with sc1:
-                            sell_shares = st.number_input(
-                                f"Stückzahl (max {total_s:g})",
-                                min_value=0.01, max_value=float(total_s),
-                                step=1.0, format="%.4f",
-                                key=f"sell_shares_{i}",
-                            )
-                        with sc2:
-                            sell_price = st.number_input(
-                                "Verkaufskurs (€)", min_value=0.01, step=0.01, format="%.2f",
-                                key=f"sell_price_{i}",
-                            )
-                        with sc3:
-                            sell_date = st.date_input(
-                                "Verkaufsdatum",
-                                value=datetime.today(),
-                                max_value=datetime.today(),
-                                key=f"sell_date_{i}",
-                            )
-                        sell_notes = st.text_input("Notiz (optional)", max_chars=200, key=f"sell_notes_{i}")
-                        sell_submitted = st.form_submit_button("💰 Verkauf speichern", type="primary")
-                        if sell_submitted:
-                            entries, err = sell_position(
-                                p["ticker"], sell_shares, sell_price,
-                                str(sell_date), sell_notes,
-                            )
-                            if err:
-                                st.error(err)
-                            else:
-                                total_pnl = sum(e["pnl_eur"] for e in entries)
-                                st.success(
-                                    f"Verkauf gespeichert — {sell_shares:g} Stück {p['ticker']} "
-                                    f"zu €{sell_price:.2f} am {sell_date}. "
-                                    f"P&L: €{total_pnl:+.2f}"
+                    with st.expander("💰 Verkauf nachtragen", expanded=False):
+                        st.caption("Das Verkaufsdatum kann auch in der Vergangenheit liegen — trage Verkäufe in Ruhe nach.")
+                        with st.form(f"sell_form_{p['ticker']}_{i}", clear_on_submit=True):
+                            total_s = p.get("total_shares", 0)
+                            sc1, sc2, sc3 = st.columns(3)
+                            with sc1:
+                                sell_shares = st.number_input(
+                                    f"Stückzahl (max {total_s:g})",
+                                    min_value=0.01, max_value=float(total_s),
+                                    step=1.0, format="%.4f",
+                                    key=f"sell_shares_{i}",
                                 )
-                                st.rerun()
+                            with sc2:
+                                sell_price = st.number_input(
+                                    "Verkaufskurs (€)", min_value=0.01, step=0.01, format="%.2f",
+                                    key=f"sell_price_{i}",
+                                )
+                            with sc3:
+                                sell_date = st.date_input(
+                                    "Verkaufsdatum",
+                                    value=datetime.today(),
+                                    max_value=datetime.today(),
+                                    key=f"sell_date_{i}",
+                                )
+                            sell_notes = st.text_input("Notiz (optional)", max_chars=200, key=f"sell_notes_{i}")
+                            sell_submitted = st.form_submit_button("💰 Verkauf speichern", type="primary")
+                            if sell_submitted:
+                                entries, err = sell_position(
+                                    p["ticker"], sell_shares, sell_price,
+                                    str(sell_date), sell_notes,
+                                )
+                                if err:
+                                    st.error(err)
+                                else:
+                                    total_pnl = sum(e["pnl_eur"] for e in entries)
+                                    st.success(
+                                        f"Verkauf gespeichert — {sell_shares:g} Stück {p['ticker']} "
+                                        f"zu €{sell_price:.2f} am {sell_date}. "
+                                        f"P&L: €{total_pnl:+.2f}"
+                                    )
+                                    st.rerun()
 
                     st.divider()
                     st.caption("⚠️ 'Position löschen' entfernt den Eintrag ohne Gewinn/Verlust zu speichern. Für Buchführung bitte Verkaufs-Form oben nutzen.")
