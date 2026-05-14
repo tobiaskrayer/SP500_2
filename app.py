@@ -840,7 +840,7 @@ def page_portfolio():
                     "Kurs (€)": f"€{p['current_price_eur']:.2f}" if p.get("current_price_eur") else "N/A",
                     "P&L %": f"{p['pnl_pct']:+.1f}%" if p["pnl_pct"] is not None else "N/A",
                     "P&L (€)": f"€{p['pnl_abs_eur']:+.2f}" if p.get("pnl_abs_eur") is not None else "N/A",
-                    "Exit": f"{rec_icon} {rec}",
+                    "Exit": f"{rec_icon} {rec} ({exits.get('signal_count', 0)}/7)",
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             st.divider()
