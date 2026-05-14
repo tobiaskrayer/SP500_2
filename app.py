@@ -725,19 +725,19 @@ def _render_exit_signals(exits: dict, entry_price: float = None):
     tp = exits.get("take_profit")
     stop_label = exits.get("stop_label") or "Stop-Loss"
     with col1:
-        ep_str = f"${entry_price:.2f}" if entry_price else "—"
+        ep_str = f"€{entry_price:.2f}" if entry_price else "—"
         st.metric("Aktueller Kurs", ep_str)
     with col2:
         sl_delta = f"-{abs(sl - entry_price):.2f}" if sl is not None and entry_price else None
-        st.metric(stop_label, f"${sl:.2f}" if sl is not None else "N/A",
+        st.metric(stop_label, f"€{sl:.2f}" if sl is not None else "N/A",
                   delta=sl_delta, delta_color="inverse")
     with col3:
         tp_delta = f"+{abs(tp - entry_price):.2f}" if tp is not None and entry_price else None
-        st.metric("Take-Profit (ATR×3, dynamisch)", f"${tp:.2f}" if tp is not None else "N/A",
+        st.metric("Take-Profit (ATR×3, dynamisch)", f"€{tp:.2f}" if tp is not None else "N/A",
                   delta=tp_delta, delta_color="normal")
 
     if atr:
-        st.caption(f"ATR(14): {atr:.2f} — Stop und Take-Profit passen sich täglich an den aktuellen Kurs an.")
+        st.caption(f"ATR(14): {atr:.4f} USD — Stop und Take-Profit passen sich täglich an den aktuellen Kurs an.")
 
     st.divider()
     signals = exits.get("signals", {})
@@ -944,7 +944,7 @@ def page_portfolio():
                                         st.rerun()
 
                     st.divider()
-                    _render_exit_signals(exits, entry_price=p.get("current_price_usd"))
+                    _render_exit_signals(exits, entry_price=p.get("current_price_eur"))
 
                     st.divider()
 

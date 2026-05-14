@@ -444,6 +444,11 @@ def evaluate_positions() -> list[dict]:
                                       avg_entry_price=avg_entry_usd)
                 if exits["signals"]:
                     inject_external_signals(exits, **{"Marktumfeld bearish": market_bearish})
+                # Kurswerte für die Anzeige in EUR umrechnen
+                if eurusd and eurusd > 0:
+                    for key in ("stop_loss", "take_profit"):
+                        if exits.get(key) is not None:
+                            exits[key] = round(exits[key] / eurusd, 2)
             if not sector:
                 try:
                     sector = stock.info.get("sector")

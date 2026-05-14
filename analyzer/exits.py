@@ -75,7 +75,7 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
         if pnl_pct >= 0.15:
             # Trailing: nie unter Einstand absinken lassen
             stop_loss = float(max(sl_trailing, avg_entry_price))
-            stop_label = f"Trailing Stop (>15% im Plus) — aktuelle Basis: ${current_price:.2f}"
+            stop_label = "Trailing Stop (>15% im Plus) — zieht mit dem Kurs nach"
         elif pnl_pct >= 0.05:
             stop_loss = float(avg_entry_price)
             stop_label = f"Break-Even Stop (+5–15% im Plus) — Einstand absichern"
