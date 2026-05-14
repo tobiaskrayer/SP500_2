@@ -801,33 +801,33 @@ def page_portfolio():
                     f"**-€{worst_case_eur:,.0f}** ({worst_pct:.1f}% des Portfoliowerts)"
                 )
 
-            # Sektor-Donut
-            sector_values: dict[str, float] = {}
-            for p in positions:
-                sector = p.get("sector") or "Unbekannt"
-                val = (p.get("current_price_eur") or 0) * p.get("total_shares", 0)
-                sector_values[sector] = sector_values.get(sector, 0) + val
-            if len(sector_values) >= 2 and total_value_eur > 0:
+            # Positions-Donut: Anteil je Aktie am Gesamtportfolio
+            if len(positions) >= 1 and total_value_eur > 0:
+                pos_labels = []
+                pos_values = []
+                for p in positions:
+                    val = (p.get("current_price_eur") or 0) * p.get("total_shares", 0)
+                    if val > 0:
+                        name = p.get("company_name") or p["ticker"]
+                        pos_labels.append(f"{name} ({p['ticker']})")
+                        pos_values.append(round(val, 2))
+
                 fig_donut = go.Figure(go.Pie(
-                    labels=list(sector_values.keys()),
-                    values=[round(v, 2) for v in sector_values.values()],
+                    labels=pos_labels,
+                    values=pos_values,
                     hole=0.45,
                     textinfo="label+percent",
                 ))
                 fig_donut.update_layout(
-                    title="Sektor-Verteilung (nach Marktwert)",
+                    title="Portfolio-Verteilung (nach Marktwert)",
                     height=300, margin=dict(l=0, r=0, t=40, b=0),
                     showlegend=False,
                 )
-                top_sector = max(sector_values, key=sector_values.get)
-                top_pct = sector_values[top_sector] / total_value_eur * 100
                 col_d1, col_d2 = st.columns([2, 1])
                 with col_d1:
                     st.plotly_chart(fig_donut, use_container_width=True)
                 with col_d2:
                     st.metric("Portfoliowert", f"€{total_value_eur:,.0f}")
-                    if top_pct > 40:
-                        st.warning(f"⚠️ Hohe Konzentration in **{top_sector}** ({top_pct:.0f}%)")
 
             # Übersichtstabelle
             rows = []
