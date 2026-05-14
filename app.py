@@ -65,6 +65,21 @@ _PAGE_LABELS = [f"{_PAGE_ICONS[p]} {p}" for p in _PAGES]
 
 def render_top_nav() -> str:
     """Horizontale Top-Navigation (Pills). Funktioniert auf Handy ohne Sidebar-Fummelei."""
+    st.markdown("""
+    <style>
+    /* Sticky Navigation */
+    [data-testid="stVerticalBlock"] > div:has([data-testid="stPills"]),
+    [data-testid="stVerticalBlock"] > div:has([data-testid="stRadio"]) {
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        background-color: #0e1117;
+        padding: 8px 0 4px 0;
+        border-bottom: 1px solid rgba(49, 51, 63, 0.6);
+        margin-bottom: 4px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     try:
         choice = st.pills(
             "Navigation",
