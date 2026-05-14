@@ -69,8 +69,6 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
         pnl_pct = (current_price - avg_entry_price) / avg_entry_price
         sl_trailing = current_price - EXITS["atr_stop_multiplier"] * atr
         sl_initial = avg_entry_price - EXITS["atr_stop_multiplier"] * atr
-        if not pd.isna(ma50):
-            sl_initial = min(sl_initial, float(ma50))
 
         if pnl_pct >= 0.15:
             # Trailing: nie unter Einstand absinken lassen
@@ -85,8 +83,7 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
     else:
         # Fallback: klassisch vom aktuellen Kurs
         use_entry = entry_price if entry_price is not None else current_price
-        sl_atr = use_entry - EXITS["atr_stop_multiplier"] * atr
-        stop_loss = float(min(sl_atr, ma50)) if not pd.isna(ma50) else float(sl_atr)
+        stop_loss = float(use_entry - EXITS["atr_stop_multiplier"] * atr)
         stop_label = "ATR-Stop (kein Einstandskurs hinterlegt)"
 
     # Exit-Signale berechnen
