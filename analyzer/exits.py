@@ -22,18 +22,27 @@ except ImportError:
     }
 
 
-def compute_exits(hist: pd.DataFrame, entry_price: float = None) -> dict:
+def compute_exits(hist: pd.DataFrame, entry_price: float = None,
+                  avg_entry_price: float = None) -> dict:
     """
     Berechnet ATR-basierte Stop-Loss/Take-Profit-Vorschläge und Exit-Signale
     aus dem übergebenen hist-DataFrame (OHLCV).
 
-    entry_price: Kaufkurs (für SL/TP). Falls None, wird der aktuelle Kurs verwendet.
+    entry_price:     Kaufkurs (historisch, für Rückwärtskompatibilität).
+    avg_entry_price: Durchschnittlicher Einstandskurs (USD) über alle Lots.
+                     Aktiviert Tier-basierte Trailing-Stop-Logik:
+                       <+5%  P&L → initialer ATR-Stop unter Einstand
+                       +5-15% P&L → Break-Even-Stop (am Einstandskurs)
+                       >+15% P&L → Trailing-Stop vom aktuellen Kurs (nie unter Break-Even)
+
+    Take-Profit ist immer dynamisch: aktueller Kurs + ATR×3.
 
     Gibt zurück:
     {
         "atr": float,
         "stop_loss": float | None,
         "take_profit": float | None,
+        "stop_label": str,            # erklärender Text zur Stop-Stufe
         "signals": dict[str, bool],   # aktive Exit-Signale
         "signal_count": int,
         "recommendation": str,        # "Halten" / "Beobachten" / "Verkaufen erwägen"
@@ -47,16 +56,38 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None) -> dict:
     low = hist["Low"]
 
     current_price = float(close.iloc[-1])
-    use_entry = entry_price if entry_price is not None else current_price
+    ma50 = close.rolling(50).mean().iloc[-1]
 
     # ATR(14)
     atr = _compute_atr(high, low, close, period=14)
 
-    # Stop-Loss und Take-Profit
-    sl_atr = use_entry - EXITS["atr_stop_multiplier"] * atr
-    ma50 = close.rolling(50).mean().iloc[-1]
-    stop_loss = float(min(sl_atr, ma50)) if not pd.isna(ma50) else float(sl_atr)
-    take_profit = float(use_entry + EXITS["atr_target_multiplier"] * atr)
+    # Take-Profit: immer dynamisch vom aktuellen Kurs
+    take_profit = float(current_price + EXITS["atr_target_multiplier"] * atr)
+
+    # Stop-Loss: Tier-basiert wenn avg_entry_price bekannt, sonst klassisch
+    if avg_entry_price is not None and avg_entry_price > 0:
+        pnl_pct = (current_price - avg_entry_price) / avg_entry_price
+        sl_trailing = current_price - EXITS["atr_stop_multiplier"] * atr
+        sl_initial = avg_entry_price - EXITS["atr_stop_multiplier"] * atr
+        if not pd.isna(ma50):
+            sl_initial = min(sl_initial, float(ma50))
+
+        if pnl_pct >= 0.15:
+            # Trailing: nie unter Einstand absinken lassen
+            stop_loss = float(max(sl_trailing, avg_entry_price))
+            stop_label = f"Trailing Stop (>15% im Plus) — aktuelle Basis: ${current_price:.2f}"
+        elif pnl_pct >= 0.05:
+            stop_loss = float(avg_entry_price)
+            stop_label = f"Break-Even Stop (+5–15% im Plus) — Einstand absichern"
+        else:
+            stop_loss = float(sl_initial)
+            stop_label = "Initialer Stop (unter Einstand) — unter 5% Gewinn"
+    else:
+        # Fallback: klassisch vom aktuellen Kurs
+        use_entry = entry_price if entry_price is not None else current_price
+        sl_atr = use_entry - EXITS["atr_stop_multiplier"] * atr
+        stop_loss = float(min(sl_atr, ma50)) if not pd.isna(ma50) else float(sl_atr)
+        stop_label = "ATR-Stop (kein Einstandskurs hinterlegt)"
 
     # Exit-Signale berechnen
     signals = {}
@@ -106,6 +137,7 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None) -> dict:
         "atr": round(atr, 4),
         "stop_loss": round(stop_loss, 2),
         "take_profit": round(take_profit, 2),
+        "stop_label": stop_label,
         "signals": signals,
         "signal_count": signal_count,
         "recommendation": recommendation,
@@ -136,6 +168,7 @@ def _empty_exits() -> dict:
         "atr": None,
         "stop_loss": None,
         "take_profit": None,
+        "stop_label": None,
         "signals": {},
         "signal_count": 0,
         "recommendation": "Keine Daten",

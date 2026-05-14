@@ -439,7 +439,9 @@ def evaluate_positions() -> list[dict]:
                 current_price_usd = float(hist["Close"].iloc[-1])
                 if eurusd:
                     current_price_eur = round(current_price_usd / eurusd, 2)
-                exits = compute_exits(hist, entry_price=current_price_usd)
+                avg_entry_usd = (avg_entry_eur * eurusd) if (avg_entry_eur and eurusd) else None
+                exits = compute_exits(hist, entry_price=current_price_usd,
+                                      avg_entry_price=avg_entry_usd)
                 if exits["signals"]:
                     inject_external_signals(exits, **{"Marktumfeld bearish": market_bearish})
             if not sector:

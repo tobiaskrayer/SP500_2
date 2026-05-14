@@ -723,20 +723,21 @@ def _render_exit_signals(exits: dict, entry_price: float = None):
     atr = exits.get("atr")
     sl = exits.get("stop_loss")
     tp = exits.get("take_profit")
+    stop_label = exits.get("stop_label") or "Stop-Loss"
     with col1:
-        ep_str = f"${entry_price:.2f}" if entry_price else "Kaufkurs"
-        st.metric("Einstieg", ep_str)
+        ep_str = f"${entry_price:.2f}" if entry_price else "—"
+        st.metric("Aktueller Kurs", ep_str)
     with col2:
-        st.metric("Stop-Loss (ATR×2)", f"${sl:.2f}" if sl is not None else "N/A",
-                  delta=f"-{abs(sl - entry_price):.2f}" if sl is not None and entry_price else None,
-                  delta_color="inverse")
+        sl_delta = f"-{abs(sl - entry_price):.2f}" if sl is not None and entry_price else None
+        st.metric(stop_label, f"${sl:.2f}" if sl is not None else "N/A",
+                  delta=sl_delta, delta_color="inverse")
     with col3:
-        st.metric("Take-Profit (ATR×3)", f"${tp:.2f}" if tp is not None else "N/A",
-                  delta=f"+{abs(tp - entry_price):.2f}" if tp is not None and entry_price else None,
-                  delta_color="normal")
+        tp_delta = f"+{abs(tp - entry_price):.2f}" if tp is not None and entry_price else None
+        st.metric("Take-Profit (ATR×3, dynamisch)", f"${tp:.2f}" if tp is not None else "N/A",
+                  delta=tp_delta, delta_color="normal")
 
     if atr:
-        st.caption(f"ATR(14): {atr:.2f}")
+        st.caption(f"ATR(14): {atr:.2f} — Stop und Take-Profit passen sich täglich an den aktuellen Kurs an.")
 
     st.divider()
     signals = exits.get("signals", {})
