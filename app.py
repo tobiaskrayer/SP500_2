@@ -95,6 +95,10 @@ def render_sidebar_secondary():
         st.caption("Sehr konservative Kaufempfehlungen")
         st.divider()
 
+        from portfolio.auth import render_logout_button
+        render_logout_button()
+        st.divider()
+
         import os
         on_cloud = bool(os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("IS_STREAMLIT_CLOUD"))
         if on_cloud:
@@ -750,9 +754,10 @@ def page_portfolio():
     st.caption("Eigene Käufe überwachen — mit Exit-Empfehlung")
 
     from portfolio.manager import (
-        add_position, remove_position_by_index, evaluate_positions,
+        add_position, remove_position, evaluate_positions,
         sell_position, load_realized, edit_lot, delete_lot, edit_realized,
     )
+    from portfolio.auth import current_user_id
 
     # Positionen auswerten
     with st.spinner("Lade aktuelle Kurse und EUR/USD-Kurs..."):
@@ -883,32 +888,33 @@ def page_portfolio():
                                 key=f"edit_lot_sel_{i}",
                             )
                             sel_lot = sorted_lots[sel_lot_idx]
-                            with st.form(f"edit_lot_form_{p['ticker']}_{i}_{sel_lot_idx}"):
+                            sel_lot_id = sel_lot.get("id", "")
+                            with st.form(f"edit_lot_form_{p['ticker']}_{sel_lot_id}"):
                                 el1, el2, el3 = st.columns(3)
                                 with el1:
                                     new_lot_date = st.date_input(
                                         "Kaufdatum",
                                         value=datetime.strptime(sel_lot["date"], "%Y-%m-%d"),
                                         max_value=datetime.today(),
-                                        key=f"el_date_{i}_{sel_lot_idx}",
+                                        key=f"el_date_{sel_lot_id}",
                                     )
                                 with el2:
                                     new_lot_shares = st.number_input(
                                         "Stückzahl", min_value=0.0001,
                                         value=float(sel_lot["shares"]),
                                         step=1.0, format="%.4f",
-                                        key=f"el_shares_{i}_{sel_lot_idx}",
+                                        key=f"el_shares_{sel_lot_id}",
                                     )
                                 with el3:
                                     new_lot_price = st.number_input(
                                         "Kaufkurs (€)", min_value=0.01,
                                         value=float(sel_lot["price_eur"]),
                                         step=0.01, format="%.2f",
-                                        key=f"el_price_{i}_{sel_lot_idx}",
+                                        key=f"el_price_{sel_lot_id}",
                                     )
                                 new_lot_notes = st.text_input(
                                     "Notiz", value=sel_lot.get("notes", ""), max_chars=200,
-                                    key=f"el_notes_{i}_{sel_lot_idx}",
+                                    key=f"el_notes_{sel_lot_id}",
                                 )
                                 ec1, ec2 = st.columns(2)
                                 with ec1:
@@ -917,7 +923,7 @@ def page_portfolio():
                                     del_lot = st.form_submit_button("🗑️ Lot löschen", type="secondary")
                                 if save_lot:
                                     err = edit_lot(
-                                        p["ticker"], sel_lot_idx,
+                                        sel_lot_id,
                                         str(new_lot_date), new_lot_shares,
                                         new_lot_price, new_lot_notes,
                                     )
@@ -927,7 +933,7 @@ def page_portfolio():
                                         st.success("Kauf aktualisiert.")
                                         st.rerun()
                                 if del_lot:
-                                    err = delete_lot(p["ticker"], sel_lot_idx)
+                                    err = delete_lot(sel_lot_id, p["ticker"])
                                     if err:
                                         st.error(err)
                                     else:
@@ -985,7 +991,7 @@ def page_portfolio():
                     st.divider()
                     st.caption("⚠️ 'Position löschen' entfernt den Eintrag ohne Gewinn/Verlust zu speichern. Für Buchführung bitte Verkaufs-Form oben nutzen.")
                     if st.button(f"🗑️ Position löschen ({p['ticker']})", key=f"remove_{i}", type="secondary"):
-                        remove_position_by_index(i)
+                        remove_position(p["ticker"])
                         st.rerun()
 
     # ── Tab 2: Realisierte Trades ──────────────────────────────────────────────
@@ -1058,36 +1064,37 @@ def page_portfolio():
                     key="edit_realized_sel",
                 )
                 sel_trade = realized[sel_trade_idx]
-                with st.form("edit_realized_form"):
+                sel_trade_id = sel_trade.get("id", "")
+                with st.form(f"edit_realized_form_{sel_trade_id}"):
                     rt1, rt2, rt3 = st.columns(3)
                     with rt1:
                         new_sell_date = st.date_input(
                             "Verkaufsdatum",
                             value=datetime.strptime(sel_trade["sell_date"], "%Y-%m-%d"),
                             max_value=datetime.today(),
-                            key="er_sell_date",
+                            key=f"er_sell_date_{sel_trade_id}",
                         )
                     with rt2:
                         new_sell_shares = st.number_input(
                             "Stückzahl", min_value=0.0001,
                             value=float(sel_trade.get("shares", 1)),
                             step=1.0, format="%.4f",
-                            key="er_shares",
+                            key=f"er_shares_{sel_trade_id}",
                         )
                     with rt3:
                         new_sell_price = st.number_input(
                             "Verkaufskurs (€)", min_value=0.01,
                             value=float(sel_trade.get("sell_price_eur", 0.01)),
                             step=0.01, format="%.2f",
-                            key="er_price",
+                            key=f"er_price_{sel_trade_id}",
                         )
                     new_trade_notes = st.text_input(
                         "Notiz", value=sel_trade.get("notes", ""), max_chars=200,
-                        key="er_notes",
+                        key=f"er_notes_{sel_trade_id}",
                     )
                     if st.form_submit_button("💾 Trade speichern", type="primary"):
                         err = edit_realized(
-                            sel_trade_idx, str(new_sell_date),
+                            sel_trade_id, str(new_sell_date),
                             new_sell_shares, new_sell_price, new_trade_notes,
                         )
                         if err:
@@ -1103,7 +1110,7 @@ def page_portfolio():
         else:
             with st.spinner("Lade historische Kursdaten für Performance-Chart..."):
                 from portfolio.history import get_portfolio_history
-                hist_data = get_portfolio_history(positions)
+                hist_data = get_portfolio_history(positions, user_id=current_user_id())
 
             if not hist_data:
                 st.info("Nicht genug Kursdaten (mindestens 3 Tage Haltedauer nötig).")
@@ -1565,6 +1572,22 @@ def _render_export_section(enriched, generate_markdown_report, generate_json_exp
 
 def main():
     init_app()
+
+    from portfolio.auth import render_auth_gate
+    if not render_auth_gate():
+        return
+
+    # Einmalige Migration aus portfolio.json falls noch vorhanden
+    if not st.session_state.get("migration_checked"):
+        st.session_state.migration_checked = True
+        try:
+            from portfolio.manager import auto_migrate_from_json
+            msg = auto_migrate_from_json()
+            if msg:
+                st.success(f"✅ {msg}", icon="📦")
+        except Exception:
+            pass
+
     render_sidebar_secondary()
     page = render_top_nav()
     result = st.session_state.scan_result

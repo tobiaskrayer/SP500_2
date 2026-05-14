@@ -1,110 +1,159 @@
 """
-Portfolio-Verwaltung: eigene Kaufpositionen speichern und überwachen.
-Daten liegen in portfolio.json im Projekt-Root (nicht im Cache).
+Portfolio-Verwaltung: Käufe, Lots und realisierte Trades in Supabase speichern.
 
-Schema (neu):
-  {
-    "positions": [
-      {
-        "ticker": "AAPL",
-        "company_name": "Apple Inc.",
-        "lots": [
-          {"date": "2025-12-01", "shares": 10, "price_eur": 165.50, "notes": ""},
-          {"date": "2026-02-15", "shares":  5, "price_eur": 180.00, "notes": "Nachkauf"}
-        ]
-      }
-    ],
-    "realized": [
-      {
-        "ticker": "AAPL", "company_name": "Apple Inc.",
-        "buy_date": "2025-12-01", "sell_date": "2026-03-10",
-        "shares": 5, "buy_price_eur": 165.50, "sell_price_eur": 190.00,
-        "pnl_eur": 122.50, "pnl_pct": 14.8, "days_held": 99, "notes": ""
-      }
-    ]
-  }
+Tabellen (müssen in Supabase angelegt sein):
+  lots             — offene Kaufpositionen (eine Zeile = ein Lot)
+  realized_trades  — abgeschlossene Trades
 
-Ältere portfolio.json ohne 'lots' werden beim ersten Lesen automatisch migriert.
-Kaufpreise und Verkaufspreise werden in EUR gespeichert.
-P&L-Berechnung über EUR/USD-Kurs (aktueller Kurs).
+Beide Tabellen haben Row-Level-Security: jeder Nutzer sieht nur seine eigenen Zeilen.
 """
 
-import json
 import os
 from datetime import date, datetime
 import yfinance as yf
 
+from portfolio.supabase_client import get_supabase
+from portfolio.auth import current_user_id
 from analyzer.exits import compute_exits, inject_external_signals
 
-PORTFOLIO_FILE = os.path.join(os.path.dirname(__file__), "..", "portfolio.json")
+_LEGACY_JSON = os.path.join(os.path.dirname(__file__), "..", "portfolio.json")
 
 
-# ── Persistenz ────────────────────────────────────────────────────────────────
+# ── Einmal-Migration aus portfolio.json ───────────────────────────────────────
 
-def load_portfolio() -> dict:
-    """Lädt portfolio.json und migriert altes Schema automatisch."""
-    if not os.path.exists(PORTFOLIO_FILE):
-        return {"positions": [], "realized": []}
+def auto_migrate_from_json() -> str | None:
+    """
+    Prüft ob portfolio.json noch auf dem Server liegt und der Nutzer noch keine
+    Supabase-Daten hat. Falls beides zutrifft, importiert sie die Daten automatisch.
+    Gibt eine Status-Meldung zurück (oder None wenn nichts zu tun war).
+    """
+    import json as _json
+
+    if not os.path.exists(_LEGACY_JSON):
+        return None
+
+    uid = _uid()
+    sb = get_supabase()
+
+    # Nur migrieren wenn noch keine Lots vorhanden
+    existing = sb.table("lots").select("id").eq("user_id", uid).limit(1).execute()
+    if existing.data:
+        return None
+
     try:
-        with open(PORTFOLIO_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if "positions" not in data:
-            data["positions"] = []
-        if "realized" not in data:
-            data["realized"] = []
-        # Migration: alte Positionen ohne 'lots' in neues Format überführen
-        data["positions"] = [_migrate_position(p) for p in data["positions"]]
-        return data
+        with open(_LEGACY_JSON, "r", encoding="utf-8") as f:
+            data = _json.load(f)
     except Exception:
-        return {"positions": [], "realized": []}
+        return None
 
+    positions = data.get("positions", [])
+    realized = data.get("realized", [])
+    if not positions and not realized:
+        return None
 
-def _migrate_position(pos: dict) -> dict:
-    """Konvertiert eine alte Position (entry_price_eur, shares, entry_date) in Lot-Format."""
-    if "lots" in pos:
-        return pos  # bereits neues Format
-    lot = {
-        "date": pos.get("entry_date", str(date.today())),
-        "shares": float(pos.get("shares", 0)),
-        "price_eur": float(pos.get("entry_price_eur") or pos.get("entry_price") or 0),
-        "notes": pos.get("notes", ""),
-    }
-    return {
-        "ticker": pos.get("ticker", ""),
-        "company_name": pos.get("company_name", pos.get("ticker", "")),
-        "lots": [lot],
-    }
+    lot_rows = []
+    for pos in positions:
+        ticker = pos.get("ticker", "").upper()
+        company_name = pos.get("company_name", ticker)
+        sector = pos.get("sector")
+        lots = pos.get("lots") or [{
+            "date": pos.get("entry_date", ""),
+            "shares": pos.get("shares", 0),
+            "price_eur": pos.get("entry_price_eur") or pos.get("entry_price") or 0,
+            "notes": pos.get("notes", ""),
+        }]
+        for lot in lots:
+            lot_rows.append({
+                "user_id": uid, "ticker": ticker, "company_name": company_name,
+                "sector": sector, "buy_date": lot.get("date", ""),
+                "shares": float(lot.get("shares", 0)),
+                "price_eur": float(lot.get("price_eur", 0)),
+                "notes": lot.get("notes", ""),
+            })
 
+    trade_rows = []
+    for trade in realized:
+        trade_rows.append({
+            "user_id": uid,
+            "ticker": trade.get("ticker", "").upper(),
+            "company_name": trade.get("company_name", ""),
+            "buy_date": trade.get("buy_date", ""),
+            "sell_date": trade.get("sell_date", ""),
+            "shares": float(trade.get("shares", 0)),
+            "buy_price_eur": float(trade.get("buy_price_eur", 0)),
+            "sell_price_eur": float(trade.get("sell_price_eur", 0)),
+            "pnl_eur": trade.get("pnl_eur"),
+            "pnl_pct": trade.get("pnl_pct"),
+            "days_held": trade.get("days_held"),
+            "notes": trade.get("notes", ""),
+        })
 
-def _save_portfolio(data: dict):
-    with open(PORTFOLIO_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    if lot_rows:
+        sb.table("lots").insert(lot_rows).execute()
+    if trade_rows:
+        sb.table("realized_trades").insert(trade_rows).execute()
+
+    return (
+        f"Daten aus portfolio.json automatisch migriert: "
+        f"{len(lot_rows)} Lots, {len(trade_rows)} realisierte Trades."
+    )
 
 
 # ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
-def _total_shares(pos: dict) -> float:
-    return sum(float(lot["shares"]) for lot in pos.get("lots", []))
+def _uid() -> str:
+    uid = current_user_id()
+    if not uid:
+        raise RuntimeError("Kein Nutzer eingeloggt.")
+    return uid
 
 
-def _avg_price(pos: dict) -> float | None:
-    """Gewichteter Durchschnittseinstiegspreis in EUR."""
-    lots = pos.get("lots", [])
+def _total_shares_from_lots(lots: list[dict]) -> float:
+    return sum(float(l["shares"]) for l in lots)
+
+
+def _avg_price_from_lots(lots: list[dict]) -> float | None:
     total_s = sum(float(l["shares"]) for l in lots)
     if not total_s:
         return None
     return sum(float(l["shares"]) * float(l["price_eur"]) for l in lots) / total_s
 
 
-def _earliest_lot_date(pos: dict) -> date | None:
-    lots = pos.get("lots", [])
+def _earliest_date_from_lots(lots: list[dict]) -> date | None:
     dates = []
     for l in lots:
         try:
-            dates.append(datetime.strptime(l["date"], "%Y-%m-%d").date())
+            dates.append(datetime.strptime(l["buy_date"], "%Y-%m-%d").date())
         except Exception:
             pass
     return min(dates) if dates else None
+
+
+# ── Lots lesen ────────────────────────────────────────────────────────────────
+
+def _fetch_lots(ticker: str | None = None) -> list[dict]:
+    """Lädt alle Lots des eingeloggten Nutzers (optional nach Ticker gefiltert)."""
+    sb = get_supabase()
+    uid = _uid()
+    q = sb.table("lots").select("*").eq("user_id", uid)
+    if ticker:
+        q = q.eq("ticker", ticker.upper())
+    res = q.order("buy_date").execute()
+    return res.data or []
+
+
+def _fetch_realized() -> list[dict]:
+    """Lädt alle realisierten Trades, neueste zuerst."""
+    sb = get_supabase()
+    uid = _uid()
+    res = (
+        sb.table("realized_trades")
+        .select("*")
+        .eq("user_id", uid)
+        .order("sell_date", desc=True)
+        .execute()
+    )
+    return res.data or []
 
 
 # ── Käufe ─────────────────────────────────────────────────────────────────────
@@ -112,71 +161,44 @@ def _earliest_lot_date(pos: dict) -> date | None:
 def add_position(ticker: str, company_name: str, entry_date: str,
                  entry_price_eur: float, shares: float, notes: str = "") -> dict:
     """
-    Fügt einen Kauf hinzu.
-    - Existiert bereits eine Position mit diesem Ticker → neues Lot anhängen.
-    - Existiert noch nicht → neue Position anlegen.
-    Rückgabe: die aktualisierte Position.
+    Fügt ein neues Lot ein. Gibt den eingefügten Datensatz zurück.
     """
     ticker = ticker.upper().strip()
-    data = load_portfolio()
+    sb = get_supabase()
+    uid = _uid()
+
+    # Firmennamen aktuell halten: falls Ticker bereits existiert, company_name übernehmen
+    existing = sb.table("lots").select("company_name").eq("user_id", uid).eq("ticker", ticker).limit(1).execute()
+    if existing.data and not company_name:
+        company_name = existing.data[0].get("company_name", ticker)
 
     lot = {
-        "date": str(entry_date),
+        "user_id": uid,
+        "ticker": ticker,
+        "company_name": company_name or ticker,
+        "buy_date": str(entry_date),
         "shares": float(shares),
         "price_eur": float(entry_price_eur),
         "notes": notes,
     }
-
-    for pos in data["positions"]:
-        if pos["ticker"] == ticker:
-            pos["lots"].append(lot)
-            if company_name:
-                pos["company_name"] = company_name
-            _save_portfolio(data)
-            return pos
-
-    # Neue Position
-    pos = {
-        "ticker": ticker,
-        "company_name": company_name or ticker,
-        "lots": [lot],
-    }
-    data["positions"].append(pos)
-    _save_portfolio(data)
-    return pos
+    res = sb.table("lots").insert(lot).execute()
+    return res.data[0] if res.data else lot
 
 
 def remove_position(ticker: str):
-    """Entfernt eine Position komplett (ohne realized-Eintrag)."""
-    data = load_portfolio()
-    data["positions"] = [p for p in data["positions"] if p["ticker"] != ticker]
-    _save_portfolio(data)
-
-
-def remove_position_by_index(index: int):
-    """Kompatibilitäts-Wrapper für alten Code der mit Index arbeitet."""
-    data = load_portfolio()
-    if 0 <= index < len(data["positions"]):
-        data["positions"].pop(index)
-        _save_portfolio(data)
+    """Entfernt alle Lots einer Position (ohne realized-Eintrag)."""
+    sb = get_supabase()
+    sb.table("lots").delete().eq("user_id", _uid()).eq("ticker", ticker.upper()).execute()
 
 
 # ── Bearbeitungen ─────────────────────────────────────────────────────────────
 
-def edit_lot(ticker: str, lot_index: int, new_date: str, new_shares: float,
+def edit_lot(lot_id: str, new_date: str, new_shares: float,
              new_price_eur: float, new_notes: str = "") -> str | None:
     """
-    Ändert ein bestehendes Lot einer offenen Position.
-    Gibt None bei Erfolg zurück, sonst eine Fehlermeldung.
+    Ändert ein Lot per UUID.
+    Gibt None bei Erfolg, sonst eine Fehlermeldung zurück.
     """
-    ticker = ticker.upper().strip()
-    data = load_portfolio()
-    pos = next((p for p in data["positions"] if p["ticker"] == ticker), None)
-    if pos is None:
-        return f"Position '{ticker}' nicht gefunden."
-    lots = pos.get("lots", [])
-    if not (0 <= lot_index < len(lots)):
-        return "Lot-Index ungültig."
     try:
         datetime.strptime(new_date, "%Y-%m-%d")
     except Exception:
@@ -185,45 +207,36 @@ def edit_lot(ticker: str, lot_index: int, new_date: str, new_shares: float,
         return "Stückzahl muss größer als 0 sein."
     if new_price_eur <= 0:
         return "Kaufkurs muss größer als 0 sein."
-    lots[lot_index]["date"] = new_date
-    lots[lot_index]["shares"] = float(new_shares)
-    lots[lot_index]["price_eur"] = float(new_price_eur)
-    lots[lot_index]["notes"] = new_notes
-    pos["lots"] = sorted(lots, key=lambda l: l["date"])
-    _save_portfolio(data)
+
+    sb = get_supabase()
+    sb.table("lots").update({
+        "buy_date": new_date,
+        "shares": float(new_shares),
+        "price_eur": float(new_price_eur),
+        "notes": new_notes,
+    }).eq("id", lot_id).eq("user_id", _uid()).execute()
     return None
 
 
-def delete_lot(ticker: str, lot_index: int) -> str | None:
+def delete_lot(lot_id: str, ticker: str) -> str | None:
     """
-    Löscht ein einzelnes Lot. Letztes Lot einer Position kann nicht gelöscht werden
-    (stattdessen Position löschen).
+    Löscht ein Lot per UUID.
+    Letztes Lot einer Position kann nicht gelöscht werden.
     """
-    ticker = ticker.upper().strip()
-    data = load_portfolio()
-    pos = next((p for p in data["positions"] if p["ticker"] == ticker), None)
-    if pos is None:
-        return f"Position '{ticker}' nicht gefunden."
-    lots = pos.get("lots", [])
-    if len(lots) <= 1:
+    sb = get_supabase()
+    uid = _uid()
+    remaining = sb.table("lots").select("id").eq("user_id", uid).eq("ticker", ticker.upper()).execute()
+    if len(remaining.data or []) <= 1:
         return "Letztes Lot kann nicht gelöscht werden — nutze 'Position löschen'."
-    if not (0 <= lot_index < len(lots)):
-        return "Lot-Index ungültig."
-    lots.pop(lot_index)
-    pos["lots"] = sorted(lots, key=lambda l: l["date"])
-    _save_portfolio(data)
+    sb.table("lots").delete().eq("id", lot_id).eq("user_id", uid).execute()
     return None
 
 
-def edit_realized(realized_index: int, new_sell_date: str, new_shares: float,
+def edit_realized(trade_id: str, new_sell_date: str, new_shares: float,
                   new_sell_price_eur: float, new_notes: str = "") -> str | None:
     """
-    Ändert einen realisierten Trade und berechnet P&L und Haltedauer neu.
+    Ändert einen realisierten Trade per UUID und berechnet P&L neu.
     """
-    data = load_portfolio()
-    realized = data.get("realized", [])
-    if not (0 <= realized_index < len(realized)):
-        return "Trade-Index ungültig."
     try:
         sell_dt = datetime.strptime(new_sell_date, "%Y-%m-%d").date()
     except Exception:
@@ -235,7 +248,13 @@ def edit_realized(realized_index: int, new_sell_date: str, new_shares: float,
     if new_sell_price_eur <= 0:
         return "Verkaufskurs muss größer als 0 sein."
 
-    trade = realized[realized_index]
+    sb = get_supabase()
+    uid = _uid()
+    res = sb.table("realized_trades").select("buy_date,buy_price_eur").eq("id", trade_id).eq("user_id", uid).execute()
+    if not res.data:
+        return "Trade nicht gefunden."
+
+    trade = res.data[0]
     buy_price = float(trade.get("buy_price_eur", 0))
     pnl_eur = round((new_sell_price_eur - buy_price) * new_shares, 2)
     pnl_pct = round((new_sell_price_eur / buy_price - 1) * 100, 2) if buy_price else None
@@ -243,16 +262,17 @@ def edit_realized(realized_index: int, new_sell_date: str, new_shares: float,
         buy_dt = datetime.strptime(trade["buy_date"], "%Y-%m-%d").date()
         days_held = (sell_dt - buy_dt).days
     except Exception:
-        days_held = trade.get("days_held")
+        days_held = None
 
-    trade["sell_date"] = new_sell_date
-    trade["shares"] = float(new_shares)
-    trade["sell_price_eur"] = float(new_sell_price_eur)
-    trade["pnl_eur"] = pnl_eur
-    trade["pnl_pct"] = pnl_pct
-    trade["days_held"] = days_held
-    trade["notes"] = new_notes
-    _save_portfolio(data)
+    sb.table("realized_trades").update({
+        "sell_date": new_sell_date,
+        "shares": float(new_shares),
+        "sell_price_eur": float(new_sell_price_eur),
+        "pnl_eur": pnl_eur,
+        "pnl_pct": pnl_pct,
+        "days_held": days_held,
+        "notes": new_notes,
+    }).eq("id", trade_id).eq("user_id", uid).execute()
     return None
 
 
@@ -261,24 +281,19 @@ def edit_realized(realized_index: int, new_sell_date: str, new_shares: float,
 def sell_position(ticker: str, shares: float, sell_price_eur: float,
                   sell_date: str, notes: str = "") -> tuple[list[dict], str | None]:
     """
-    Verkauft (Teil-)Anteile einer Position nach FIFO-Prinzip.
+    Verkauft (Teil-)Anteile nach FIFO-Prinzip.
 
     Returns:
         (realized_entries, error_message)
-        Bei Erfolg: (Liste der neuen realized-Einträge, None)
-        Bei Fehler: ([], Fehlermeldung als String)
     """
     ticker = ticker.upper().strip()
-    data = load_portfolio()
 
-    # Position finden
-    pos = next((p for p in data["positions"] if p["ticker"] == ticker), None)
-    if pos is None:
+    lots = _fetch_lots(ticker)
+    if not lots:
         return [], f"Position '{ticker}' nicht gefunden."
 
-    total = _total_shares(pos)
+    total = _total_shares_from_lots(lots)
 
-    # Validierungen
     if shares <= 0:
         return [], "Stückzahl muss größer als 0 sein."
     if shares > total + 0.0001:
@@ -294,39 +309,45 @@ def sell_position(ticker: str, shares: float, sell_price_eur: float,
     if sell_dt > date.today():
         return [], "Verkaufsdatum darf nicht in der Zukunft liegen."
 
-    earliest = _earliest_lot_date(pos)
+    earliest = _earliest_date_from_lots(lots)
     if earliest and sell_dt < earliest:
         return [], (
             f"Verkaufsdatum {sell_date} liegt vor dem frühesten Kaufdatum "
             f"{earliest.isoformat()} dieser Position."
         )
 
-    # FIFO: Lots von ältesten zu neuesten abarbeiten
-    lots = sorted(pos["lots"], key=lambda l: l["date"])
-    remaining_to_sell = float(shares)
-    realized_entries = []
+    sb = get_supabase()
+    uid = _uid()
+    company_name = lots[0].get("company_name", ticker)
 
-    for lot in lots:
-        if remaining_to_sell <= 0.0001:
+    # FIFO: Lots chronologisch abarbeiten
+    sorted_lots = sorted(lots, key=lambda l: l["buy_date"])
+    remaining = float(shares)
+    realized_entries = []
+    lots_to_delete = []
+    lots_to_update = []
+
+    for lot in sorted_lots:
+        if remaining <= 0.0001:
             break
         lot_shares = float(lot["shares"])
-        sold_from_lot = min(lot_shares, remaining_to_sell)
+        sold = min(lot_shares, remaining)
 
-        pnl_eur = round((float(sell_price_eur) - float(lot["price_eur"])) * sold_from_lot, 2)
+        pnl_eur = round((float(sell_price_eur) - float(lot["price_eur"])) * sold, 2)
         pnl_pct = round((float(sell_price_eur) / float(lot["price_eur"]) - 1) * 100, 2) if lot["price_eur"] else None
-
         try:
-            buy_dt = datetime.strptime(lot["date"], "%Y-%m-%d").date()
+            buy_dt = datetime.strptime(lot["buy_date"], "%Y-%m-%d").date()
             days_held = (sell_dt - buy_dt).days
         except Exception:
             days_held = None
 
         realized_entries.append({
+            "user_id": uid,
             "ticker": ticker,
-            "company_name": pos.get("company_name", ticker),
-            "buy_date": lot["date"],
+            "company_name": company_name,
+            "buy_date": lot["buy_date"],
             "sell_date": sell_date,
-            "shares": round(sold_from_lot, 6),
+            "shares": round(sold, 6),
             "buy_price_eur": float(lot["price_eur"]),
             "sell_price_eur": float(sell_price_eur),
             "pnl_eur": pnl_eur,
@@ -335,38 +356,35 @@ def sell_position(ticker: str, shares: float, sell_price_eur: float,
             "notes": notes,
         })
 
-        lot["shares"] = round(lot_shares - sold_from_lot, 6)
-        remaining_to_sell -= sold_from_lot
+        new_shares = round(lot_shares - sold, 6)
+        if new_shares < 0.0001:
+            lots_to_delete.append(lot["id"])
+        else:
+            lots_to_update.append({"id": lot["id"], "shares": new_shares})
 
-    # Lots mit 0 Stück entfernen
-    pos["lots"] = [l for l in lots if float(l["shares"]) > 0.0001]
+        remaining -= sold
 
-    # Position entfernen wenn leer
-    if not pos["lots"]:
-        data["positions"] = [p for p in data["positions"] if p["ticker"] != ticker]
-    else:
-        # Aktualisierte Lots zurückschreiben (FIFO-Reihenfolge beibehalten, re-sort nach Datum)
-        pos["lots"] = sorted(pos["lots"], key=lambda l: l["date"])
-        for p in data["positions"]:
-            if p["ticker"] == ticker:
-                p["lots"] = pos["lots"]
-                break
+    # DB-Updates
+    for lot_id in lots_to_delete:
+        sb.table("lots").delete().eq("id", lot_id).eq("user_id", uid).execute()
+    for upd in lots_to_update:
+        sb.table("lots").update({"shares": upd["shares"]}).eq("id", upd["id"]).eq("user_id", uid).execute()
 
-    data["realized"].extend(realized_entries)
-    _save_portfolio(data)
+    if realized_entries:
+        sb.table("realized_trades").insert(realized_entries).execute()
+
     return realized_entries, None
 
 
 def load_realized() -> list[dict]:
     """Gibt alle realisierten Trades zurück (neueste zuerst)."""
-    data = load_portfolio()
-    return sorted(data.get("realized", []), key=lambda r: r.get("sell_date", ""), reverse=True)
+    return _fetch_realized()
 
 
 # ── Live-Daten ────────────────────────────────────────────────────────────────
 
 def get_eurusd_rate() -> float | None:
-    """Aktueller EUR/USD-Kurs (1 EUR = X USD). None bei Fehler."""
+    """Aktueller EUR/USD-Kurs. None bei Fehler."""
     try:
         hist = yf.Ticker("EURUSD=X").history(period="5d")
         if hist is not None and len(hist) > 0:
@@ -378,16 +396,14 @@ def get_eurusd_rate() -> float | None:
 
 def evaluate_positions() -> list[dict]:
     """
-    Lädt alle offenen Positionen und berechnet für jede:
-    - aktueller Kurs in USD (live) und EUR (umgerechnet)
-    - P&L in EUR absolut und Prozent (bezogen auf Durchschnittseinstand)
-    - Tage gehalten (ab erstem Lot)
-    - Exit-Signale & Empfehlung
+    Lädt alle offenen Lots, gruppiert nach Ticker, berechnet P&L und Exit-Signale.
+    Output-Schema identisch zur alten JSON-Version, damit app.py und history.py
+    unverändert bleiben.
     """
-    data = load_portfolio()
+    lots = _fetch_lots()
     eurusd = get_eurusd_rate()
 
-    # Marktumfeld einmalig abrufen für alle Positionen
+    # Marktumfeld einmalig abrufen
     market_bearish = False
     try:
         from analyzer.market_filter import check_market
@@ -396,19 +412,25 @@ def evaluate_positions() -> list[dict]:
     except Exception:
         pass
 
+    # Lots nach Ticker gruppieren
+    grouped: dict[str, list[dict]] = {}
+    for lot in lots:
+        t = lot["ticker"]
+        grouped.setdefault(t, []).append(lot)
+
     results = []
-    for pos in data["positions"]:
-        ticker = pos["ticker"]
-        total_shares = _total_shares(pos)
-        avg_entry_eur = _avg_price(pos)
-        earliest_dt = _earliest_lot_date(pos)
+    for ticker, ticker_lots in grouped.items():
+        total_shares = _total_shares_from_lots(ticker_lots)
+        avg_entry_eur = _avg_price_from_lots(ticker_lots)
+        earliest_dt = _earliest_date_from_lots(ticker_lots)
         days_held = (date.today() - earliest_dt).days if earliest_dt else None
+        company_name = ticker_lots[0].get("company_name", ticker)
+        sector = ticker_lots[0].get("sector")
 
         current_price_usd = None
         current_price_eur = None
         exits = {"atr": None, "stop_loss": None, "take_profit": None,
                  "signals": {}, "signal_count": 0, "recommendation": "Keine Daten"}
-        sector = pos.get("sector")
 
         try:
             stock = yf.Ticker(ticker)
@@ -419,14 +441,15 @@ def evaluate_positions() -> list[dict]:
                     current_price_eur = round(current_price_usd / eurusd, 2)
                 exits = compute_exits(hist, entry_price=current_price_usd)
                 if exits["signals"]:
-                    inject_external_signals(
-                        exits, **{"Marktumfeld bearish": market_bearish}
-                    )
+                    inject_external_signals(exits, **{"Marktumfeld bearish": market_bearish})
             if not sector:
                 try:
                     sector = stock.info.get("sector")
                     if sector:
-                        pos["sector"] = sector
+                        # Sektor im ersten Lot cachen
+                        get_supabase().table("lots").update({"sector": sector}).eq(
+                            "user_id", _uid()
+                        ).eq("ticker", ticker).execute()
                 except Exception:
                     pass
         except Exception:
@@ -438,10 +461,22 @@ def evaluate_positions() -> list[dict]:
             pnl_abs_eur = round((current_price_eur - avg_entry_eur) * total_shares, 2)
             pnl_pct = round((current_price_eur / avg_entry_eur - 1) * 100, 2)
 
+        # Lots ins alte Format konvertieren (app.py erwartet 'date' und 'price_eur')
+        lots_compat = [
+            {
+                "id": l["id"],
+                "date": l["buy_date"],
+                "shares": l["shares"],
+                "price_eur": l["price_eur"],
+                "notes": l.get("notes", ""),
+            }
+            for l in sorted(ticker_lots, key=lambda x: x["buy_date"])
+        ]
+
         results.append({
             "ticker": ticker,
-            "company_name": pos.get("company_name", ticker),
-            "lots": pos.get("lots", []),
+            "company_name": company_name,
+            "lots": lots_compat,
             "total_shares": total_shares,
             "avg_entry_price_eur": round(avg_entry_eur, 2) if avg_entry_eur else None,
             "entry_date": earliest_dt.isoformat() if earliest_dt else None,
@@ -453,6 +488,7 @@ def evaluate_positions() -> list[dict]:
             "pnl_abs_eur": pnl_abs_eur,
             "pnl_pct": pnl_pct,
             "exits": exits,
-            "notes": pos.get("lots", [{}])[-1].get("notes", "") if pos.get("lots") else "",
+            "notes": lots_compat[-1].get("notes", "") if lots_compat else "",
         })
+
     return results

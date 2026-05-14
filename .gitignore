@@ -26,5 +26,8 @@ Thumbs.db
 # Streamlit
 .streamlit/secrets.toml
 
+# Portfolio-Daten (jetzt in Supabase — nicht mehr im Repo)
+portfolio.json
+
 # Hinweis: cache/*.json wird NICHT ignoriert —
 # GitHub Actions committed die Analyseergebnisse täglich ins Repo.

@@ -10,11 +10,16 @@ from datetime import date, datetime, timedelta
 import yfinance as yf
 import pandas as pd
 
-CACHE_FILE = os.path.join(os.path.dirname(__file__), "..", "cache", "portfolio_history.json")
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache")
 _CACHE_VERSION = "v2"  # erhöhen wenn Berechnungslogik sich ändert → Cache-Invalidierung
 
 
-def get_portfolio_history(positions: list[dict]) -> dict | None:
+def _cache_file(user_id: str | None = None) -> str:
+    suffix = f"_{user_id}" if user_id else ""
+    return os.path.join(_CACHE_DIR, f"portfolio_history{suffix}.json")
+
+
+def get_portfolio_history(positions: list[dict], user_id: str | None = None) -> dict | None:
     """
     Berechnet die tägliche Portfolio-Wertentwicklung ab dem ersten Kauf.
 
@@ -57,8 +62,8 @@ def get_portfolio_history(positions: list[dict]) -> dict | None:
     tickers_needed = [pos["ticker"] for pos in positions] + ["EURUSD=X", "SPY"]
 
     # Cache prüfen
-    cached = _load_cache()
     cache_key = f"{_CACHE_VERSION}_{start_str}_{','.join(sorted(p['ticker'] for p in positions))}"
+    cached = _load_cache(user_id)
     if cached and cached.get("cache_key") == cache_key and cached.get("end_date") == today.isoformat():
         return cached.get("result")
 
@@ -170,7 +175,7 @@ def get_portfolio_history(positions: list[dict]) -> dict | None:
             "max_drawdown_pct": max_dd,
         }
 
-        _save_cache({"cache_key": cache_key, "end_date": today.isoformat(), "result": result})
+        _save_cache({"cache_key": cache_key, "end_date": today.isoformat(), "result": result}, user_id)
         return result
 
     except Exception:
@@ -203,20 +208,22 @@ def _max_drawdown(indexed: list[float]) -> float:
     return round(max_dd, 2)
 
 
-def _load_cache() -> dict | None:
+def _load_cache(user_id: str | None = None) -> dict | None:
     try:
-        if os.path.exists(CACHE_FILE):
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+        path = _cache_file(user_id)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
     except Exception:
         pass
     return None
 
 
-def _save_cache(data: dict):
+def _save_cache(data: dict, user_id: str | None = None):
     try:
-        os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        path = _cache_file(user_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
     except Exception:
         pass
