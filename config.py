@@ -45,12 +45,14 @@ CONFIDENCE = {
 
 # --- Exit-Signale ---
 EXITS = {
-    "atr_stop_multiplier": 2.0,    # Stop-Loss = entry - 2 * ATR(14)
-    "atr_target_multiplier": 3.0,  # Take-Profit = entry + 3 * ATR(14) (Risk/Reward 1:1.5)
-    "rsi_overbought": 75,          # RSI-Grenze für Exit-Signal
-    "bb_exit_pct": 0.95,           # Kurs ≥ 95% BB-Band → Exit-Signal
-    "warn_signals": 1,             # Ab X aktiven Signalen → "Beobachten"
-    "sell_signals": 3,             # Ab X aktiven Signalen → "Verkaufen erwägen"
+    "atr_stop_multiplier": 2.0,      # Stop-Loss = entry - 2 * ATR(14)
+    "atr_target_multiplier": 3.0,    # Take-Profit = entry + 3 * ATR(14) (Risk/Reward 1:1.5)
+    "rsi_overbought": 75,            # RSI-Grenze für Exit-Signal
+    "bb_exit_pct": 0.95,             # Kurs ≥ 95% BB-Band → Exit-Signal
+    "macd_bearish_days": 3,          # MACD muss X Tage durchgehend unter Signallinie liegen
+    "trailing_drawdown_pct": 0.15,   # Kurs ≥ 15% unter 50-Tage-Hoch → Exit-Signal
+    "warn_signals": 1,               # Ab X aktiven Signalen → "Beobachten"
+    "sell_signals": 3,               # Ab X aktiven Signalen → "Verkaufen erwägen"
 }
 
 # --- Erwartetes Upside (separate Magnitude-Kennzahl) ---

@@ -144,7 +144,7 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series) -> dict | None:
         exits = compute_exits(hist, entry_price=current_price)
         if exits["signals"]:
             rs_6m = rs.get("rs_6m", 0) or 0
-            exits["signals"]["6M-Relative Stärke negativ"] = bool(rs_6m < 0)
+            exits["signals"]["6M-Rendite negativ"] = bool(rs_6m < 0)
             exits["signal_count"] = sum(1 for v in exits["signals"].values() if v)
             from config import EXITS as _EXITS
             if exits["signal_count"] >= _EXITS["sell_signals"]:

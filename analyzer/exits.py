@@ -15,6 +15,8 @@ except ImportError:
         "atr_target_multiplier": 3.0,
         "rsi_overbought": 75,
         "bb_exit_pct": 0.95,
+        "macd_bearish_days": 3,
+        "trailing_drawdown_pct": 0.15,
         "warn_signals": 1,
         "sell_signals": 3,
     }
@@ -68,8 +70,9 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None) -> dict:
         rsi_val is not None and rsi_val > EXITS["rsi_overbought"]
     )
 
-    # 3. MACD bearish crossover (MACD-Linie kreuzt unter Signallinie)
-    signals["MACD bearish Crossover"] = _macd_bearish(close)
+    # 3. MACD ≥ N Tage unter Signallinie (robuster als einmaliger Crossover)
+    macd_days = EXITS.get("macd_bearish_days", 3)
+    signals[f"MACD {macd_days}+ Tage bearish"] = _macd_sustained_bearish(close, days=macd_days)
 
     # 4. Bollinger-Band oben (≥ exit-Schwelle)
     bb_pct = _bb_position(close)
@@ -77,9 +80,15 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None) -> dict:
         bb_pct is not None and bb_pct >= EXITS["bb_exit_pct"]
     )
 
-    # 5. 6M-Relative Stärke negativ — wird extern gesetzt, hier Platzhalter False
-    # (wird in scorer.py nach RS-Check gesetzt)
-    signals["6M-Relative Stärke negativ"] = False
+    # 5. Trailing Drawdown: Kurs ≥ X% unter 50-Tage-Hoch
+    dd_pct = EXITS.get("trailing_drawdown_pct", 0.15)
+    signals[f"Trailing Drawdown (≥{int(dd_pct*100)}% vom 50T-Hoch)"] = _trailing_drawdown(
+        close, threshold=dd_pct
+    )
+
+    # 6. 6M-Rendite negativ (Kurs tiefer als vor 6 Monaten)
+    # In scorer.py wird dieses Feld ggf. mit RS-Vergleich gegen S&P500 überschrieben
+    signals["6M-Rendite negativ"] = _rs_negative_6m(close)
 
     signal_count = sum(1 for v in signals.values() if v)
 
@@ -134,19 +143,35 @@ def _compute_rsi(close: pd.Series, period: int = 14) -> float | None:
     return float(val) if not pd.isna(val) else None
 
 
-def _macd_bearish(close: pd.Series) -> bool:
-    if len(close) < 35:
+def _macd_sustained_bearish(close: pd.Series, days: int = 3) -> bool:
+    """MACD liegt mindestens `days` Handelstage in Folge unter der Signallinie."""
+    if len(close) < 35 + days:
         return False
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
     signal = macd.ewm(span=9, adjust=False).mean()
-    # Bearish crossover: im vorletzten Bar war MACD über Signal, jetzt darunter
-    if len(macd) < 2:
+    if len(macd) < days:
         return False
-    was_above = float(macd.iloc[-2]) >= float(signal.iloc[-2])
-    now_below = float(macd.iloc[-1]) < float(signal.iloc[-1])
-    return bool(was_above and now_below)
+    return all(float(macd.iloc[-i]) < float(signal.iloc[-i]) for i in range(1, days + 1))
+
+
+def _trailing_drawdown(close: pd.Series, lookback: int = 50, threshold: float = 0.15) -> bool:
+    """Kurs ist mindestens `threshold` % unter dem Hoch der letzten `lookback` Tage."""
+    n = min(lookback, len(close))
+    recent_high = float(close.iloc[-n:].max())
+    if recent_high <= 0:
+        return False
+    drawdown = (recent_high - float(close.iloc[-1])) / recent_high
+    return drawdown >= threshold
+
+
+def _rs_negative_6m(close: pd.Series) -> bool:
+    """Kurs liegt tiefer als vor ~6 Monaten (126 Handelstage)."""
+    if len(close) < 63:
+        return False
+    lookback = min(126, len(close) - 1)
+    return float(close.iloc[-1]) < float(close.iloc[-lookback])
 
 
 def _bb_position(close: pd.Series, period: int = 20, std: int = 2) -> float | None:
