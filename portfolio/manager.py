@@ -161,6 +161,101 @@ def remove_position_by_index(index: int):
         _save_portfolio(data)
 
 
+# ── Bearbeitungen ─────────────────────────────────────────────────────────────
+
+def edit_lot(ticker: str, lot_index: int, new_date: str, new_shares: float,
+             new_price_eur: float, new_notes: str = "") -> str | None:
+    """
+    Ändert ein bestehendes Lot einer offenen Position.
+    Gibt None bei Erfolg zurück, sonst eine Fehlermeldung.
+    """
+    ticker = ticker.upper().strip()
+    data = load_portfolio()
+    pos = next((p for p in data["positions"] if p["ticker"] == ticker), None)
+    if pos is None:
+        return f"Position '{ticker}' nicht gefunden."
+    lots = pos.get("lots", [])
+    if not (0 <= lot_index < len(lots)):
+        return "Lot-Index ungültig."
+    try:
+        datetime.strptime(new_date, "%Y-%m-%d")
+    except Exception:
+        return f"Ungültiges Datum: {new_date} (Format YYYY-MM-DD erwartet)."
+    if new_shares <= 0:
+        return "Stückzahl muss größer als 0 sein."
+    if new_price_eur <= 0:
+        return "Kaufkurs muss größer als 0 sein."
+    lots[lot_index]["date"] = new_date
+    lots[lot_index]["shares"] = float(new_shares)
+    lots[lot_index]["price_eur"] = float(new_price_eur)
+    lots[lot_index]["notes"] = new_notes
+    pos["lots"] = sorted(lots, key=lambda l: l["date"])
+    _save_portfolio(data)
+    return None
+
+
+def delete_lot(ticker: str, lot_index: int) -> str | None:
+    """
+    Löscht ein einzelnes Lot. Letztes Lot einer Position kann nicht gelöscht werden
+    (stattdessen Position löschen).
+    """
+    ticker = ticker.upper().strip()
+    data = load_portfolio()
+    pos = next((p for p in data["positions"] if p["ticker"] == ticker), None)
+    if pos is None:
+        return f"Position '{ticker}' nicht gefunden."
+    lots = pos.get("lots", [])
+    if len(lots) <= 1:
+        return "Letztes Lot kann nicht gelöscht werden — nutze 'Position löschen'."
+    if not (0 <= lot_index < len(lots)):
+        return "Lot-Index ungültig."
+    lots.pop(lot_index)
+    pos["lots"] = sorted(lots, key=lambda l: l["date"])
+    _save_portfolio(data)
+    return None
+
+
+def edit_realized(realized_index: int, new_sell_date: str, new_shares: float,
+                  new_sell_price_eur: float, new_notes: str = "") -> str | None:
+    """
+    Ändert einen realisierten Trade und berechnet P&L und Haltedauer neu.
+    """
+    data = load_portfolio()
+    realized = data.get("realized", [])
+    if not (0 <= realized_index < len(realized)):
+        return "Trade-Index ungültig."
+    try:
+        sell_dt = datetime.strptime(new_sell_date, "%Y-%m-%d").date()
+    except Exception:
+        return f"Ungültiges Datum: {new_sell_date} (Format YYYY-MM-DD erwartet)."
+    if sell_dt > date.today():
+        return "Verkaufsdatum darf nicht in der Zukunft liegen."
+    if new_shares <= 0:
+        return "Stückzahl muss größer als 0 sein."
+    if new_sell_price_eur <= 0:
+        return "Verkaufskurs muss größer als 0 sein."
+
+    trade = realized[realized_index]
+    buy_price = float(trade.get("buy_price_eur", 0))
+    pnl_eur = round((new_sell_price_eur - buy_price) * new_shares, 2)
+    pnl_pct = round((new_sell_price_eur / buy_price - 1) * 100, 2) if buy_price else None
+    try:
+        buy_dt = datetime.strptime(trade["buy_date"], "%Y-%m-%d").date()
+        days_held = (sell_dt - buy_dt).days
+    except Exception:
+        days_held = trade.get("days_held")
+
+    trade["sell_date"] = new_sell_date
+    trade["shares"] = float(new_shares)
+    trade["sell_price_eur"] = float(new_sell_price_eur)
+    trade["pnl_eur"] = pnl_eur
+    trade["pnl_pct"] = pnl_pct
+    trade["days_held"] = days_held
+    trade["notes"] = new_notes
+    _save_portfolio(data)
+    return None
+
+
 # ── Verkäufe ──────────────────────────────────────────────────────────────────
 
 def sell_position(ticker: str, shares: float, sell_price_eur: float,

@@ -751,7 +751,7 @@ def page_portfolio():
 
     from portfolio.manager import (
         add_position, remove_position_by_index, evaluate_positions,
-        sell_position, load_realized,
+        sell_position, load_realized, edit_lot, delete_lot, edit_realized,
     )
 
     # Positionen auswerten
@@ -869,6 +869,71 @@ def page_portfolio():
                         if avg and len(lots) > 1:
                             st.caption(f"Ø Einstandspreis: **€{avg:.2f}**")
 
+                    # Lot bearbeiten / löschen
+                    if lots:
+                        with st.expander("✏️ Kauf bearbeiten oder löschen"):
+                            sorted_lots = sorted(lots, key=lambda l: l["date"])
+                            lot_labels = [
+                                f"{l['date']} — {l['shares']:g} Stück @ €{l['price_eur']:.2f}"
+                                for l in sorted_lots
+                            ]
+                            sel_lot_idx = st.selectbox(
+                                "Welchen Kauf bearbeiten?", range(len(lot_labels)),
+                                format_func=lambda x: lot_labels[x],
+                                key=f"edit_lot_sel_{i}",
+                            )
+                            sel_lot = sorted_lots[sel_lot_idx]
+                            with st.form(f"edit_lot_form_{p['ticker']}_{i}_{sel_lot_idx}"):
+                                el1, el2, el3 = st.columns(3)
+                                with el1:
+                                    new_lot_date = st.date_input(
+                                        "Kaufdatum",
+                                        value=datetime.strptime(sel_lot["date"], "%Y-%m-%d"),
+                                        max_value=datetime.today(),
+                                        key=f"el_date_{i}_{sel_lot_idx}",
+                                    )
+                                with el2:
+                                    new_lot_shares = st.number_input(
+                                        "Stückzahl", min_value=0.0001,
+                                        value=float(sel_lot["shares"]),
+                                        step=1.0, format="%.4f",
+                                        key=f"el_shares_{i}_{sel_lot_idx}",
+                                    )
+                                with el3:
+                                    new_lot_price = st.number_input(
+                                        "Kaufkurs (€)", min_value=0.01,
+                                        value=float(sel_lot["price_eur"]),
+                                        step=0.01, format="%.2f",
+                                        key=f"el_price_{i}_{sel_lot_idx}",
+                                    )
+                                new_lot_notes = st.text_input(
+                                    "Notiz", value=sel_lot.get("notes", ""), max_chars=200,
+                                    key=f"el_notes_{i}_{sel_lot_idx}",
+                                )
+                                ec1, ec2 = st.columns(2)
+                                with ec1:
+                                    save_lot = st.form_submit_button("💾 Speichern", type="primary")
+                                with ec2:
+                                    del_lot = st.form_submit_button("🗑️ Lot löschen", type="secondary")
+                                if save_lot:
+                                    err = edit_lot(
+                                        p["ticker"], sel_lot_idx,
+                                        str(new_lot_date), new_lot_shares,
+                                        new_lot_price, new_lot_notes,
+                                    )
+                                    if err:
+                                        st.error(err)
+                                    else:
+                                        st.success("Kauf aktualisiert.")
+                                        st.rerun()
+                                if del_lot:
+                                    err = delete_lot(p["ticker"], sel_lot_idx)
+                                    if err:
+                                        st.error(err)
+                                    else:
+                                        st.success("Lot gelöscht.")
+                                        st.rerun()
+
                     st.divider()
                     _render_exit_signals(exits, entry_price=p.get("current_price_usd"))
 
@@ -978,6 +1043,58 @@ def page_portfolio():
             if sel_year != "Alle":
                 year_pnl = sum(r.get("pnl_eur", 0) or 0 for r in filtered)
                 st.caption(f"P&L gesamt {sel_year}: **€{year_pnl:+,.2f}**")
+
+            # Realisierten Trade bearbeiten
+            st.divider()
+            with st.expander("✏️ Realisierten Trade bearbeiten"):
+                trade_labels = [
+                    f"{r.get('sell_date','?')} — {r.get('ticker','')} "
+                    f"{r.get('shares',0):g} Stück @ €{r.get('sell_price_eur',0):.2f}"
+                    for r in realized
+                ]
+                sel_trade_idx = st.selectbox(
+                    "Welchen Trade bearbeiten?", range(len(trade_labels)),
+                    format_func=lambda x: trade_labels[x],
+                    key="edit_realized_sel",
+                )
+                sel_trade = realized[sel_trade_idx]
+                with st.form("edit_realized_form"):
+                    rt1, rt2, rt3 = st.columns(3)
+                    with rt1:
+                        new_sell_date = st.date_input(
+                            "Verkaufsdatum",
+                            value=datetime.strptime(sel_trade["sell_date"], "%Y-%m-%d"),
+                            max_value=datetime.today(),
+                            key="er_sell_date",
+                        )
+                    with rt2:
+                        new_sell_shares = st.number_input(
+                            "Stückzahl", min_value=0.0001,
+                            value=float(sel_trade.get("shares", 1)),
+                            step=1.0, format="%.4f",
+                            key="er_shares",
+                        )
+                    with rt3:
+                        new_sell_price = st.number_input(
+                            "Verkaufskurs (€)", min_value=0.01,
+                            value=float(sel_trade.get("sell_price_eur", 0.01)),
+                            step=0.01, format="%.2f",
+                            key="er_price",
+                        )
+                    new_trade_notes = st.text_input(
+                        "Notiz", value=sel_trade.get("notes", ""), max_chars=200,
+                        key="er_notes",
+                    )
+                    if st.form_submit_button("💾 Trade speichern", type="primary"):
+                        err = edit_realized(
+                            sel_trade_idx, str(new_sell_date),
+                            new_sell_shares, new_sell_price, new_trade_notes,
+                        )
+                        if err:
+                            st.error(err)
+                        else:
+                            st.success("Trade aktualisiert.")
+                            st.rerun()
 
     # ── Tab 3: Performance vs. SPY ─────────────────────────────────────────────
     with tab_perf:
