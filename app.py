@@ -816,12 +816,14 @@ def page_portfolio():
                     labels=pos_labels,
                     values=pos_values,
                     hole=0.45,
-                    textinfo="label+percent",
+                    textinfo="percent",
+                    textposition="inside",
                 ))
                 fig_donut.update_layout(
                     title="Portfolio-Verteilung (nach Marktwert)",
-                    height=300, margin=dict(l=0, r=0, t=40, b=0),
-                    showlegend=False,
+                    height=320, margin=dict(l=0, r=0, t=40, b=0),
+                    showlegend=True,
+                    legend=dict(orientation="h", y=-0.15, x=0.5, xanchor="center"),
                 )
                 col_d1, col_d2 = st.columns([2, 1])
                 with col_d1:
