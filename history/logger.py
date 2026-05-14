@@ -5,7 +5,7 @@ Hängt bei jedem Scan einen Eintrag an history/recommendations_log.json an.
 
 import json
 import os
-from datetime import date
+from datetime import date, datetime
 
 LOG_FILE = os.path.join(os.path.dirname(__file__), "recommendations_log.json")
 
@@ -15,7 +15,12 @@ def append_scan_result(result: dict):
     Speichert die heutigen Empfehlungen vollständig im Log.
     Existierende Einträge desselben Datums werden überschrieben.
     """
-    today = str(date.today())
+    # Datum aus dem Scan-Timestamp nehmen, Fallback auf heute
+    ts = result.get("timestamp", "")
+    try:
+        today = datetime.fromisoformat(ts).strftime("%Y-%m-%d")
+    except Exception:
+        today = str(date.today())
     market = result.get("market", {})
 
     entry = {
