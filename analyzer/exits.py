@@ -58,17 +58,16 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
     current_price = float(close.iloc[-1])
     ma50 = close.rolling(50).mean().iloc[-1]
 
-    # ATR(14)
+    # ATR(14) — roh für die Anzeige, gekappt für Berechnungen
     atr = _compute_atr(high, low, close, period=14)
+    # Volatilitäts-Cap: verhindert übermäßig weite Stop/TP durch Spike-ATR
+    atr_calc = min(atr, current_price * 0.06)
 
-    # Take-Profit: immer dynamisch vom aktuellen Kurs
-    take_profit = float(current_price + EXITS["atr_target_multiplier"] * atr)
-
-    # Stop-Loss: Tier-basiert wenn avg_entry_price bekannt, sonst klassisch
+    # Stop-Loss und Take-Profit: Tier-basiert wenn avg_entry_price bekannt
     if avg_entry_price is not None and avg_entry_price > 0:
         pnl_pct = (current_price - avg_entry_price) / avg_entry_price
-        sl_trailing = current_price - EXITS["atr_stop_multiplier"] * atr
-        sl_initial = avg_entry_price - EXITS["atr_stop_multiplier"] * atr
+        sl_trailing = current_price - EXITS["atr_stop_multiplier"] * atr_calc
+        sl_initial = avg_entry_price - EXITS["atr_stop_multiplier"] * atr_calc
 
         if pnl_pct >= 0.15:
             # Trailing: nie unter Einstand absinken lassen
@@ -76,15 +75,20 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
             stop_label = "Trailing Stop (>15% im Plus) — zieht mit dem Kurs nach"
         elif pnl_pct >= 0.05:
             stop_loss = float(avg_entry_price)
-            stop_label = f"Break-Even Stop (+5–15% im Plus) — Einstand absichern"
+            stop_label = "Break-Even Stop (+5–15% im Plus) — Einstand absichern"
         else:
             stop_loss = float(sl_initial)
             stop_label = "Initialer Stop (unter Einstand) — unter 5% Gewinn"
+
+        # Take-Profit vom Einstandskurs (Option 2); mindestens 1×ATR über aktuellem Kurs
+        tp_from_entry = avg_entry_price + EXITS["atr_target_multiplier"] * atr_calc
+        take_profit = float(max(tp_from_entry, current_price + atr_calc))
     else:
         # Fallback: klassisch vom aktuellen Kurs
         use_entry = entry_price if entry_price is not None else current_price
-        stop_loss = float(use_entry - EXITS["atr_stop_multiplier"] * atr)
+        stop_loss = float(use_entry - EXITS["atr_stop_multiplier"] * atr_calc)
         stop_label = "ATR-Stop (kein Einstandskurs hinterlegt)"
+        take_profit = float(current_price + EXITS["atr_target_multiplier"] * atr_calc)
 
     # Exit-Signale berechnen
     signals = {}
