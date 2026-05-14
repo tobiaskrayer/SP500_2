@@ -65,18 +65,26 @@ _PAGE_LABELS = [f"{_PAGE_ICONS[p]} {p}" for p in _PAGES]
 
 def render_top_nav() -> str:
     """Horizontale Top-Navigation (Pills). Funktioniert auf Handy ohne Sidebar-Fummelei."""
+    # position:fixed damit die Leiste beim Scrollen immer oben bleibt.
+    # padding-top auf dem äußeren Block kompensiert den wegfallenden Platz.
     st.markdown("""
     <style>
-    /* Sticky Navigation */
+    /* Navigationsleiste fixiert direkt unterhalb des Streamlit-Headers */
     [data-testid="stVerticalBlock"] > div:has([data-testid="stPills"]),
     [data-testid="stVerticalBlock"] > div:has([data-testid="stRadio"]) {
-        position: sticky;
-        top: 0;
-        z-index: 999;
-        background-color: #0e1117;
-        padding: 8px 0 4px 0;
-        border-bottom: 1px solid rgba(49, 51, 63, 0.6);
-        margin-bottom: 4px;
+        position: fixed !important;
+        top: 3.75rem !important;
+        left: 0 !important;
+        right: 0 !important;
+        z-index: 9990 !important;
+        background-color: #0e1117 !important;
+        padding: 0.5rem 2rem !important;
+        border-bottom: 1px solid rgba(49, 51, 63, 0.6) !important;
+    }
+    /* Platz-Kompensation: verhindert, dass Content hinter die fixierte Leiste rutscht */
+    [data-testid="stVerticalBlock"]:has(> div > [data-testid="stPills"]),
+    [data-testid="stVerticalBlock"]:has(> div > [data-testid="stRadio"]) {
+        padding-top: 3.5rem !important;
     }
     </style>
     """, unsafe_allow_html=True)
