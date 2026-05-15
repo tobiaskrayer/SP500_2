@@ -157,14 +157,20 @@ def page_market_overview(result: dict | None):
     st.header("Marktübersicht")
 
     if result is None:
-        st.info(
-            "Noch keine Analysedaten vorhanden.\n\n"
-            "Die erste Analyse wird automatisch von **GitHub Actions** durchgeführt "
-            "(täglich Mo–Fr um 22:30 Uhr). "
-            "Du kannst den Scan auch manuell über **GitHub → Actions → Run workflow** starten.",
-            icon="⏳"
-        )
+        st.caption("Kein gecachter Scan vorhanden — lade aktuelle Marktdaten live.")
+        _show_quick_market()
         return
+
+    # Gecachte Daten anzeigen, aber Alter des Scans kennzeichnen
+    ts = result.get("timestamp", "")
+    if ts:
+        try:
+            from datetime import datetime as _dt
+            scan_age = (_dt.now() - _dt.fromisoformat(ts)).total_seconds() / 3600
+            if scan_age > 20:
+                st.caption(f"⏱ Scan-Daten vom {ts[:16]} — live-Daten werden heute Abend aktualisiert.")
+        except Exception:
+            pass
 
     market = result.get("market", {})
     _render_market_status(market)
@@ -660,7 +666,24 @@ def page_full_scan(result: dict | None):
 
     all_results = result.get("all_results", [])
     if not all_results:
-        st.info("Keine Scan-Ergebnisse vorhanden (Gate 1 hat den Scan blockiert).")
+        market_passed = result.get("market", {}).get("passed", False)
+        reason = result.get("market", {}).get("reason", "")
+        if not market_passed:
+            st.warning(
+                f"Gate 1 hat diesen Scan blockiert — Markt war zum Scan-Zeitpunkt bearisch.\n\n"
+                f"Grund: {reason}\n\n"
+                "Der nächste automatische Scan läuft nach Marktschluss. "
+                "Sobald Gate 1 besteht, erscheinen hier die Ergebnisse.",
+                icon="🚫",
+            )
+        else:
+            ts = result.get("timestamp", "")
+            st.warning(
+                f"Der Scan lief (Gate 1 ✅), aber es konnten keine Aktien analysiert werden.\n\n"
+                f"Mögliche Ursache: yfinance-Ratenlimit oder Netzwerkfehler während des Scans. "
+                f"Scan-Zeitstempel: {ts}",
+                icon="⚠️",
+            )
         return
 
     # Tabelle aufbauen
