@@ -1827,5 +1827,10 @@
       "sp500_above_ma200": true
     },
     "recommendations": []
-  }
-]
+  },
+  {
+    "date": "2026-05-15",
+    "market_context": {
+      "vix": 18.43,
+      "sp500_price": 7408.5,
+      "sp500_above_ma50": 
