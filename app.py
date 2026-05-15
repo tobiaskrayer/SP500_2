@@ -1233,11 +1233,19 @@ def page_performance():
     from history import analytics as ana
     from history.export import generate_markdown_report, generate_json_export
 
+    import os as _os
+    from history.logger import LOG_FILE as _LOG_FILE
     log = load_log()
     if not log:
         st.info(
             "Noch keine historischen Empfehlungen gespeichert.\n\n"
             "Nach dem nächsten Scan werden die Empfehlungen automatisch archiviert."
+        )
+        _exists = _os.path.exists(_LOG_FILE)
+        _size = _os.path.getsize(_LOG_FILE) if _exists else 0
+        st.caption(
+            f"Diagnose — Log-Pfad: `{_LOG_FILE}` | "
+            f"Datei vorhanden: {_exists} | Größe: {_size} Bytes"
         )
         return
 
