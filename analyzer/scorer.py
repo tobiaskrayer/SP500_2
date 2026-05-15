@@ -68,6 +68,7 @@ def run_full_scan(progress_callback=None) -> dict:
 
     # Parallele Analyse
     results = []
+    failed_tickers = []
     with ThreadPoolExecutor(max_workers=ANALYSIS["max_workers"]) as executor:
         futures = {
             executor.submit(_analyze_ticker, ticker, sp500_hist): ticker
@@ -81,10 +82,32 @@ def run_full_scan(progress_callback=None) -> dict:
                 res = future.result()
                 if res:
                     results.append(res)
+                else:
+                    failed_tickers.append(ticker)
             except Exception as e:
                 logger.warning(f"{ticker}: {e}")
+                failed_tickers.append(ticker)
             if progress_callback:
                 progress_callback(done, total, ticker)
+
+    # Einen Retry-Versuch für fehlgeschlagene Tickers (mit kurzem Delay)
+    if failed_tickers:
+        logger.info(f"Retry für {len(failed_tickers)} fehlgeschlagene Tickers...")
+        import time as _time
+        _time.sleep(5)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            retry_futures = {
+                executor.submit(_analyze_ticker, ticker, sp500_hist): ticker
+                for ticker in failed_tickers
+            }
+            for future in as_completed(retry_futures):
+                ticker = retry_futures[future]
+                try:
+                    res = future.result()
+                    if res:
+                        results.append(res)
+                except Exception as e:
+                    logger.warning(f"Retry {ticker}: {e}")
 
     # Sortierung: Empfehlungen zuerst, dann nach Tech-Score
     results.sort(key=lambda x: (not x["recommended"], -x["tech_score"]))

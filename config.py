@@ -75,5 +75,5 @@ CACHE = {
 # --- Analyse ---
 ANALYSIS = {
     "history_days": 365,   # Kursdaten der letzten 365 Tage laden
-    "max_workers": 10,     # Parallele Downloads (yfinance)
+    "max_workers": 3,      # Parallele Downloads (yfinance) — niedrig halten gegen Rate-Limit
 }
