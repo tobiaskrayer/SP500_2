@@ -50,6 +50,16 @@ def init_app():
         st.session_state.scheduler_started = True
 
 
+def _fmt_ts(ts: str) -> str:
+    """ISO-Zeitstempel → lesbares deutsches Format (Europe/Berlin)."""
+    try:
+        from zoneinfo import ZoneInfo
+        dt = datetime.fromisoformat(ts).replace(tzinfo=ZoneInfo("UTC"))
+        return dt.astimezone(ZoneInfo("Europe/Berlin")).strftime("%d.%m.%Y %H:%M") + " (DE)"
+    except Exception:
+        return ts
+
+
 # ── Navigation ────────────────────────────────────────────────────────────────
 
 _PAGES = ["Marktübersicht", "Empfehlungen", "Mein Portfolio", "Performance", "Vollständiger Scan"]
@@ -119,13 +129,7 @@ def render_sidebar_secondary():
         if st.session_state.scan_result:
             ts = st.session_state.scan_result.get("timestamp", "")
             if ts:
-                try:
-                    from zoneinfo import ZoneInfo
-                    dt_utc = datetime.fromisoformat(ts).replace(tzinfo=ZoneInfo("UTC"))
-                    dt_berlin = dt_utc.astimezone(ZoneInfo("Europe/Berlin"))
-                    st.caption(f"Letzte Analyse: {dt_berlin.strftime('%d.%m.%Y %H:%M')} (DE)")
-                except Exception:
-                    pass
+                st.caption(f"Letzte Analyse: {_fmt_ts(ts)}")
 
         st.divider()
         st.caption("Datenquelle: Yahoo Finance (yfinance)")
@@ -168,7 +172,7 @@ def page_market_overview(result: dict | None):
             from datetime import datetime as _dt
             scan_age = (_dt.now() - _dt.fromisoformat(ts)).total_seconds() / 3600
             if scan_age > 20:
-                st.caption(f"⏱ Scan-Daten vom {ts[:16]} — live-Daten werden heute Abend aktualisiert.")
+                st.caption(f"⏱ Scan-Daten vom {_fmt_ts(ts)} — live-Daten werden heute Abend aktualisiert.")
         except Exception:
             pass
 
@@ -680,8 +684,10 @@ def page_full_scan(result: dict | None):
             ts = result.get("timestamp", "")
             st.warning(
                 f"Der Scan lief (Gate 1 ✅), aber es konnten keine Aktien analysiert werden.\n\n"
-                f"Mögliche Ursache: yfinance-Ratenlimit oder Netzwerkfehler während des Scans. "
-                f"Scan-Zeitstempel: {ts}",
+                f"Mögliche Ursache: yfinance-Ratenlimit oder Netzwerkfehler. "
+                f"Scan vom: {_fmt_ts(ts)}\n\n"
+                "Klicke **Analyse neu starten** — der Scan läuft jetzt mit weniger parallelen "
+                "Anfragen und sollte durchkommen.",
                 icon="⚠️",
             )
         return
