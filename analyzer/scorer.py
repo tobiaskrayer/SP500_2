@@ -205,12 +205,15 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
         # Gate 3: Technische Analyse
         tech = check_technical(hist)
 
-        # Gate 4: Fundamentalanalyse
-        try:
-            if stock is None:
-                stock = yf.Ticker(ticker)
-            info = stock.info
-        except Exception:
+        # Gate 4: Fundamentalanalyse — nur wenn Gate 2+3 bestanden (spart ~450 HTTP-Calls)
+        if rs["passed"] and tech["passed"]:
+            try:
+                if stock is None:
+                    stock = yf.Ticker(ticker)
+                info = stock.info
+            except Exception:
+                info = {}
+        else:
             info = {}
         fund = check_fundamental(info)
 
