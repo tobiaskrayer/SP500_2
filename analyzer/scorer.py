@@ -66,12 +66,16 @@ def run_full_scan(progress_callback=None) -> dict:
     # S&P500-Kursdaten für relative Stärke
     sp500_hist = _get_sp500_history()
 
-    # Parallele Analyse
+    # Batch-Download aller Kursdaten — drastisch weniger HTTP-Requests als Einzelcalls
+    hist_cache = _batch_download(tickers)
+    logger.info(f"Batch-Download: {len(hist_cache)}/{total} Ticker geladen")
+
+    # Analyse: nur Kursdaten-Verarbeitung parallelisieren (kein Netzwerk)
     results = []
-    failed_tickers = []
+    missing_tickers = []
     with ThreadPoolExecutor(max_workers=ANALYSIS["max_workers"]) as executor:
         futures = {
-            executor.submit(_analyze_ticker, ticker, sp500_hist): ticker
+            executor.submit(_analyze_ticker, ticker, sp500_hist, hist_cache.get(ticker), market): ticker
             for ticker in tickers
         }
         done = 0
@@ -83,22 +87,21 @@ def run_full_scan(progress_callback=None) -> dict:
                 if res:
                     results.append(res)
                 else:
-                    failed_tickers.append(ticker)
+                    missing_tickers.append(ticker)
             except Exception as e:
                 logger.warning(f"{ticker}: {e}")
-                failed_tickers.append(ticker)
+                missing_tickers.append(ticker)
             if progress_callback:
                 progress_callback(done, total, ticker)
 
-    # Einen Retry-Versuch für fehlgeschlagene Tickers (mit kurzem Delay)
-    if failed_tickers:
-        logger.info(f"Retry für {len(failed_tickers)} fehlgeschlagene Tickers...")
-        import time as _time
-        _time.sleep(5)
+    # Retry für Ticker ohne Batch-Daten — Einzelcalls mit Delay
+    if missing_tickers:
+        logger.info(f"Einzelcall-Retry für {len(missing_tickers)} Ticker ohne Batch-Daten...")
+        time.sleep(3)
         with ThreadPoolExecutor(max_workers=2) as executor:
             retry_futures = {
-                executor.submit(_analyze_ticker, ticker, sp500_hist): ticker
-                for ticker in failed_tickers
+                executor.submit(_analyze_ticker, ticker, sp500_hist, None, market): ticker
+                for ticker in missing_tickers
             }
             for future in as_completed(retry_futures):
                 ticker = retry_futures[future]
@@ -125,6 +128,52 @@ def run_full_scan(progress_callback=None) -> dict:
     }
 
 
+def _batch_download(tickers: list) -> dict:
+    """
+    Lädt Kursdaten für alle Ticker in möglichst wenigen HTTP-Requests via yf.download().
+    Gibt ein Dict {ticker: DataFrame} zurück. Ticker ohne ausreichende Daten fehlen.
+    """
+    hist_cache = {}
+    # yf.download akzeptiert maximal ~500 Ticker pro Call — wir machen ggf. 2 Batches
+    batch_size = 250
+    batches = [tickers[i:i + batch_size] for i in range(0, len(tickers), batch_size)]
+
+    for batch_num, batch in enumerate(batches, 1):
+        logger.info(f"Batch {batch_num}/{len(batches)}: {len(batch)} Ticker...")
+        try:
+            raw = yf.download(
+                batch,
+                period="1y",
+                auto_adjust=True,
+                progress=False,
+                group_by="ticker",
+                threads=False,  # kein internes Threading — vermeidet Parallelcalls
+            )
+            if raw is None or raw.empty:
+                logger.warning(f"Batch {batch_num}: leere Antwort")
+                continue
+
+            for ticker in batch:
+                try:
+                    if len(batch) == 1:
+                        df = raw.copy()
+                    else:
+                        df = raw[ticker].copy()
+                    df = df.dropna(how="all")
+                    if len(df) >= 60:
+                        hist_cache[ticker] = df
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.warning(f"Batch {batch_num} fehlgeschlagen: {e}")
+
+        if batch_num < len(batches):
+            time.sleep(2)  # kurze Pause zwischen Batches
+
+    return hist_cache
+
+
 def _get_sp500_history() -> pd.Series:
     try:
         sp = yf.Ticker("^GSPC")
@@ -135,12 +184,18 @@ def _get_sp500_history() -> pd.Series:
         return pd.Series(dtype=float)
 
 
-def _analyze_ticker(ticker: str, sp500_hist: pd.Series) -> dict | None:
+def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
+                    prefetched_hist: pd.DataFrame | None = None,
+                    market: dict | None = None) -> dict | None:
     try:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="1y")
-        if hist is None or len(hist) < 60:
-            return None
+        if prefetched_hist is not None and len(prefetched_hist) >= 60:
+            hist = prefetched_hist
+            stock = None  # wird nur für .info (Gate 4) benötigt
+        else:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="1y")
+            if hist is None or len(hist) < 60:
+                return None
 
         close = hist["Close"]
 
@@ -152,6 +207,8 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series) -> dict | None:
 
         # Gate 4: Fundamentalanalyse
         try:
+            if stock is None:
+                stock = yf.Ticker(ticker)
             info = stock.info
         except Exception:
             info = {}
@@ -167,7 +224,8 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series) -> dict | None:
         exits = compute_exits(hist, entry_price=current_price)
         if exits["signals"]:
             rs_6m = rs.get("rs_6m", 0) or 0
-            market_bearish = not market.get("passed", True) or market.get("warning", False)
+            _mkt = market or {}
+            market_bearish = not _mkt.get("passed", True) or _mkt.get("warning", False)
             inject_external_signals(
                 exits,
                 **{"6M-Rendite negativ": rs_6m < 0, "Marktumfeld bearish": market_bearish},
