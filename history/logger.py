@@ -5,6 +5,8 @@ Hängt bei jedem Scan einen Eintrag an history/recommendations_log.json an.
 
 import json
 import os
+import tempfile
+import time
 from datetime import date, datetime
 
 LOG_FILE = os.path.join(os.path.dirname(__file__), "recommendations_log.json")
@@ -43,8 +45,14 @@ def append_scan_result(result: dict):
     log.sort(key=lambda e: e["date"])
 
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-    with open(LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(log, f, indent=2, ensure_ascii=False)
+    # Atomischer Schreibvorgang: erst temp-Datei, dann umbenennen.
+    # Verhindert Race Condition wenn Streamlit gleichzeitig load_log() aufruft.
+    dir_ = os.path.dirname(LOG_FILE)
+    with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp",
+                                     delete=False, encoding="utf-8") as tmp:
+        json.dump(log, tmp, indent=2, ensure_ascii=False)
+        tmp_path = tmp.name
+    os.replace(tmp_path, LOG_FILE)
 
 
 def _extract_recommendation(r: dict) -> dict:
@@ -101,9 +109,15 @@ def load_log() -> list[dict]:
 def _load_log() -> list[dict]:
     if not os.path.exists(LOG_FILE):
         return []
-    try:
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
+    for attempt in range(3):
+        try:
+            with open(LOG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, ValueError):
+            # Datei könnte gerade geschrieben werden — kurz warten
+            if attempt < 2:
+                time.sleep(0.2)
+        except Exception:
+            break
+    return []
