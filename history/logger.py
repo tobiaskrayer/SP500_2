@@ -48,11 +48,20 @@ def append_scan_result(result: dict):
     # Atomischer Schreibvorgang: erst temp-Datei, dann umbenennen.
     # Verhindert Race Condition wenn Streamlit gleichzeitig load_log() aufruft.
     dir_ = os.path.dirname(LOG_FILE)
-    with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp",
-                                     delete=False, encoding="utf-8") as tmp:
-        json.dump(log, tmp, indent=2, ensure_ascii=False)
-        tmp_path = tmp.name
-    os.replace(tmp_path, LOG_FILE)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp",
+                                         delete=False, encoding="utf-8") as tmp:
+            json.dump(log, tmp, indent=2, ensure_ascii=False)
+            tmp_path = tmp.name
+        os.replace(tmp_path, LOG_FILE)
+    except Exception:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        raise
 
 
 def _extract_recommendation(r: dict) -> dict:
@@ -90,8 +99,8 @@ def _extract_recommendation(r: dict) -> dict:
         "confidence_label": r.get("confidence_label"),
         "tech_score": tech.get("score"),
         "fund_score": fund.get("score"),
-        "tech_signals": tech.get("signals", {}),
-        "fund_signals": fund.get("signals", {}),
+        "tech_signals": {k: bool(v) for k, v in tech.get("signals", {}).items()},
+        "fund_signals": {k: bool(v) for k, v in fund.get("signals", {}).items()},
         "indicators": raw_indicators,
         "metrics": raw_metrics,
         "rs_3m": rs.get("rs_3m"),

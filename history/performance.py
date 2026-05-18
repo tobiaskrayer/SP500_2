@@ -163,6 +163,7 @@ def _load_cache() -> dict:
 def _save_cache(cache: dict):
     # Atomischer Schreibvorgang: erst temp-Datei, dann umbenennen.
     # Verhindert korrupte Lesungen wenn die Performance-Seite gleichzeitig lädt.
+    tmp_path = None
     try:
         dir_ = os.path.dirname(PERF_CACHE_FILE)
         os.makedirs(dir_, exist_ok=True)
@@ -173,6 +174,11 @@ def _save_cache(cache: dict):
         os.replace(tmp_path, PERF_CACHE_FILE)
     except Exception as e:
         logger.warning(f"Performance-Cache konnte nicht gespeichert werden: {e}")
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def _load_hist_for_perf(ticker: str, start_str: str, end_date) -> object:

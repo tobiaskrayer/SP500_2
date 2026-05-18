@@ -32,5 +32,8 @@ portfolio.json
 # Kurs-Cache (Laufzeit-Cache, soll das Repo nicht aufblähen)
 cache/prices/
 
+# Atomische Schreibvorgänge hinterlassen bei Fehler eine .tmp-Datei — nie committen
+history/*.tmp
+
 # Hinweis: cache/*.json wird NICHT ignoriert —
 # GitHub Actions committed die Analyseergebnisse täglich ins Repo.

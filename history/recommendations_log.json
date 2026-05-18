@@ -1827,5 +1827,310 @@
       "sp500_above_ma200": true
     },
     "recommendations": []
+  },
+  {
+    "date": "2026-05-18",
+    "market_context": {
+      "vix": 17.84,
+      "sp500_price": 7403.05,
+      "sp500_above_ma50": true,
+      "sp500_above_ma200": true
+    },
+    "recommendations": [
+      {
+        "ticker": "AMAT",
+        "sector": "Technology",
+        "price": 413.57,
+        "combined_score": 0.92,
+        "confidence_label": "Strong Buy",
+        "tech_score": 1.0,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": true
+        },
+        "fund_signals": {
+          "KGV < 35": false,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 52.2,
+          "bb_pct": 51.3,
+          "ma50": 382.58,
+          "ma200": 281.99,
+          "price": 413.57
+        },
+        "metrics": {
+          "pe": 39.0,
+          "revenue_growth": "11.4%",
+          "profit_margin": "29.3%",
+          "debt_to_equity": 27.0,
+          "sector": "Technology"
+        },
+        "rs_3m": 7.12,
+        "rs_6m": 75.98,
+        "upside_pct": 13.03,
+        "upside_label": "Mittel"
+      },
+      {
+        "ticker": "NVDA",
+        "sector": "Technology",
+        "price": 222.32,
+        "combined_score": 0.8532,
+        "confidence_label": "Strong Buy",
+        "tech_score": 0.833,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": false,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 61.7,
+          "bb_pct": 74.6,
+          "ma50": 193.96,
+          "ma200": 186.18,
+          "price": 222.32
+        },
+        "metrics": {
+          "pe": 45.5,
+          "revenue_growth": "73.2%",
+          "profit_margin": "55.6%",
+          "debt_to_equity": 7.3,
+          "sector": "Technology"
+        },
+        "rs_3m": 12.02,
+        "rs_6m": 9.11,
+        "upside_pct": 16.97,
+        "upside_label": "Hoch"
+      },
+      {
+        "ticker": "KO",
+        "sector": "Consumer Defensive",
+        "price": 81.2,
+        "combined_score": 0.7387,
+        "confidence_label": "Moderate Buy",
+        "tech_score": 0.833,
+        "fund_score": 1.0,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": true,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 69.1,
+          "bb_pct": 87.7,
+          "ma50": 77.1,
+          "ma200": 71.86,
+          "price": 81.2
+        },
+        "metrics": {
+          "pe": 25.5,
+          "revenue_growth": "12.1%",
+          "profit_margin": "27.8%",
+          "debt_to_equity": 124.9,
+          "sector": "Consumer Defensive"
+        },
+        "rs_3m": -5.42,
+        "rs_6m": 5.97,
+        "upside_pct": 4.68,
+        "upside_label": "Gering"
+      },
+      {
+        "ticker": "AMD",
+        "sector": "Technology",
+        "price": 420.99,
+        "combined_score": 0.8532,
+        "confidence_label": "Strong Buy",
+        "tech_score": 0.833,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": false,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 66.2,
+          "bb_pct": 68.1,
+          "ma50": 283.78,
+          "ma200": 225.41,
+          "price": 420.99
+        },
+        "metrics": {
+          "pe": 139.9,
+          "revenue_growth": "37.8%",
+          "profit_margin": "13.4%",
+          "debt_to_equity": 6.0,
+          "sector": "Technology"
+        },
+        "rs_3m": 99.12,
+        "rs_6m": 59.9,
+        "upside_pct": 21.58,
+        "upside_label": "Hoch"
+      },
+      {
+        "ticker": "GS",
+        "sector": "Financial Services",
+        "price": 946.36,
+        "combined_score": 0.618,
+        "confidence_label": "Watch",
+        "tech_score": 0.833,
+        "fund_score": 0.6,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": true,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": false,
+          "Free Cashflow positiv": false
+        },
+        "indicators": {
+          "rsi": 57.4,
+          "bb_pct": 70.4,
+          "ma50": 883.7,
+          "ma200": 838.29,
+          "price": 946.36
+        },
+        "metrics": {
+          "pe": 17.3,
+          "revenue_growth": "14.5%",
+          "profit_margin": "29.4%",
+          "debt_to_equity": 678.6,
+          "sector": "Financial Services"
+        },
+        "rs_3m": -4.33,
+        "rs_6m": 8.81,
+        "upside_pct": 7.91,
+        "upside_label": "Mittel"
+      },
+      {
+        "ticker": "QCOM",
+        "sector": "Technology",
+        "price": 203.64,
+        "combined_score": 0.8532,
+        "confidence_label": "Strong Buy",
+        "tech_score": 0.833,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": true,
+          "Umsatzwachstum > 5%": false,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 63.1,
+          "bb_pct": 68.8,
+          "ma50": 150.34,
+          "ma200": 158.02,
+          "price": 203.64
+        },
+        "metrics": {
+          "pe": 21.9,
+          "revenue_growth": "-3.5%",
+          "profit_margin": "22.3%",
+          "debt_to_equity": 56.0,
+          "sector": "Technology"
+        },
+        "rs_3m": 35.51,
+        "rs_6m": 8.17,
+        "upside_pct": 28.07,
+        "upside_label": "Hoch"
+      },
+      {
+        "ticker": "MO",
+        "sector": "Consumer Defensive",
+        "price": 73.72,
+        "combined_score": 0.8532,
+        "confidence_label": "Strong Buy",
+        "tech_score": 0.833,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": true,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": false,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 65.6,
+          "bb_pct": 82.1,
+          "ma50": 67.22,
+          "ma200": 62.42,
+          "price": 73.72
+        },
+        "metrics": {
+          "pe": 15.4,
+          "revenue_growth": "5.3%",
+          "profit_margin": "39.5%",
+          "debt_to_equity": null,
+          "sector": "Consumer Defensive"
+        },
+        "rs_3m": 4.47,
+        "rs_6m": 22.15,
+        "upside_pct": 13.33,
+        "upside_label": "Mittel"
+      }
+    ]
   }
 ]
