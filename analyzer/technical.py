@@ -4,37 +4,11 @@ Score muss >= config.TECHNICAL["min_score"] sein (Standard: 70%).
 """
 
 import pandas as pd
-import numpy as np
 import logging
 from config import TECHNICAL
+from analyzer.indicators import rsi as _rsi_val, rsi_series, macd, bollinger
 
 logger = logging.getLogger(__name__)
-
-
-def _rsi(close: pd.Series, period: int = 14) -> float:
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.iloc[-1]
-
-
-def _macd(close: pd.Series):
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    macd_line = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
-
-
-def _bollinger(close: pd.Series, period: int = 20):
-    ma = close.rolling(period).mean()
-    std = close.rolling(period).std()
-    upper = ma + 2 * std
-    lower = ma - 2 * std
-    return ma, upper, lower
 
 
 def check_technical(hist: pd.DataFrame) -> dict:
@@ -72,15 +46,15 @@ def check_technical(hist: pd.DataFrame) -> dict:
         sig_above_ma200 = (price > ma200) if ma200 is not None else False
 
         # RSI
-        rsi_val = _rsi(close)
+        rsi_val = _rsi_val(close) or 50.0
         sig_rsi = TECHNICAL["rsi_min"] <= rsi_val <= TECHNICAL["rsi_max"]
 
         # MACD
-        macd_line, signal_line, histogram = _macd(close)
+        macd_line, signal_line, histogram = macd(close)
         sig_macd = (histogram.iloc[-1] > 0) and (macd_line.iloc[-1] > signal_line.iloc[-1])
 
         # Bollinger Bands
-        bb_ma, bb_upper, bb_lower = _bollinger(close)
+        bb_ma, bb_upper, bb_lower = bollinger(close)
         bb_pct = (price - bb_lower.iloc[-1]) / (bb_upper.iloc[-1] - bb_lower.iloc[-1] + 1e-9)
         sig_bb = bb_pct < TECHNICAL["bb_upper_pct"]
 
@@ -107,7 +81,7 @@ def check_technical(hist: pd.DataFrame) -> dict:
             "close": close,
             "ma50": close.rolling(50).mean(),
             "ma200": close.rolling(200).mean() if len(close) >= 200 else None,
-            "rsi": _compute_rsi_series(close),
+            "rsi": rsi_series(close),
             "macd_line": macd_line,
             "signal_line": signal_line,
             "histogram": histogram,
@@ -127,9 +101,3 @@ def check_technical(hist: pd.DataFrame) -> dict:
     return result
 
 
-def _compute_rsi_series(close: pd.Series, period: int = 14) -> pd.Series:
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss.replace(0, float("nan"))
-    return 100 - (100 / (1 + rs))

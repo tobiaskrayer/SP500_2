@@ -29,6 +29,7 @@ def check_relative_strength(stock_hist: pd.Series, sp500_hist: pd.Series) -> dic
         "passed": False,
         "rs_3m": None,
         "rs_6m": None,
+        "rs_score": None,
         "stock_3m": None,
         "stock_6m": None,
         "sp500_3m": None,
@@ -57,11 +58,12 @@ def check_relative_strength(stock_hist: pd.Series, sp500_hist: pd.Series) -> dic
 
         result["rs_3m"] = round(rs_3m, 2)
         result["rs_6m"] = round(rs_6m, 2)
+        result["rs_score"] = round(rs_3m + rs_6m, 2)  # kombinierter Score für Perzentil-Ranking
         result["stock_3m"] = round(stock_3m, 2)
         result["stock_6m"] = round(stock_6m, 2)
         result["sp500_3m"] = round(sp_3m, 2)
         result["sp500_6m"] = round(sp_6m, 2)
-        result["passed"] = rs_3m > 0 and rs_6m > 0
+        result["passed"] = rs_3m > 0 and rs_6m > 0  # provisorisch; wird in scorer.py per Rang überschrieben
 
     except Exception as e:
         logger.warning(f"RS-Berechnung fehlgeschlagen: {e}")

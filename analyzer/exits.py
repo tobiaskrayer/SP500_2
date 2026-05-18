@@ -5,7 +5,8 @@ Die 4-Gate-Filterlogik bleibt unverändert.
 """
 
 import pandas as pd
-import numpy as np
+
+from analyzer.indicators import rsi as _ind_rsi, macd_sustained_bearish, bb_position, atr as _ind_atr
 
 try:
     from config import EXITS
@@ -59,7 +60,7 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
     ma50 = close.rolling(50).mean().iloc[-1]
 
     # ATR(14) — roh für die Anzeige, gekappt für Berechnungen
-    atr = _compute_atr(high, low, close, period=14)
+    atr = _ind_atr(high, low, close, period=14)
     # Volatilitäts-Cap: verhindert übermäßig weite Stop/TP durch Spike-ATR
     atr_calc = min(atr, current_price * 0.06)
 
@@ -97,17 +98,17 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
     signals["Kurs unter 50-Tage-MA"] = bool(not pd.isna(ma50) and current_price < float(ma50))
 
     # 2. RSI überkauft
-    rsi_val = _compute_rsi(close)
+    rsi_val = _ind_rsi(close)
     signals[f"RSI überkauft (>{EXITS['rsi_overbought']})"] = bool(
         rsi_val is not None and rsi_val > EXITS["rsi_overbought"]
     )
 
     # 3. MACD ≥ N Tage unter Signallinie (robuster als einmaliger Crossover)
     macd_days = EXITS.get("macd_bearish_days", 3)
-    signals[f"MACD {macd_days}+ Tage bearish"] = _macd_sustained_bearish(close, days=macd_days)
+    signals[f"MACD {macd_days}+ Tage bearish"] = macd_sustained_bearish(close, days=macd_days)
 
     # 4. Bollinger-Band oben (≥ exit-Schwelle)
-    bb_pct = _bb_position(close)
+    bb_pct = bb_position(close)
     signals[f"Am oberen Bollinger-Band (≥{int(EXITS['bb_exit_pct']*100)}%)"] = bool(
         bb_pct is not None and bb_pct >= EXITS["bb_exit_pct"]
     )
@@ -176,42 +177,6 @@ def _empty_exits() -> dict:
     }
 
 
-def _compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> float:
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean().iloc[-1]
-    return float(atr) if not pd.isna(atr) else float(tr.mean())
-
-
-def _compute_rsi(close: pd.Series, period: int = 14) -> float | None:
-    if len(close) < period + 1:
-        return None
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss.replace(0, float("nan"))
-    rsi = 100 - (100 / (1 + rs))
-    val = rsi.iloc[-1]
-    return float(val) if not pd.isna(val) else None
-
-
-def _macd_sustained_bearish(close: pd.Series, days: int = 3) -> bool:
-    """MACD liegt mindestens `days` Handelstage in Folge unter der Signallinie."""
-    if len(close) < 35 + days:
-        return False
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    signal = macd.ewm(span=9, adjust=False).mean()
-    if len(macd) < days:
-        return False
-    return all(float(macd.iloc[-i]) < float(signal.iloc[-i]) for i in range(1, days + 1))
-
-
 def _trailing_drawdown(close: pd.Series, lookback: int = 50, threshold: float = 0.15) -> bool:
     """Kurs ist mindestens `threshold` % unter dem Hoch der letzten `lookback` Tage."""
     n = min(lookback, len(close))
@@ -228,16 +193,3 @@ def _rs_negative_6m(close: pd.Series) -> bool:
         return False
     lookback = min(126, len(close) - 1)
     return float(close.iloc[-1]) < float(close.iloc[-lookback])
-
-
-def _bb_position(close: pd.Series, period: int = 20, std: int = 2) -> float | None:
-    if len(close) < period:
-        return None
-    ma = close.rolling(period).mean()
-    upper = ma + std * close.rolling(period).std()
-    lower = ma - std * close.rolling(period).std()
-    u = upper.iloc[-1]
-    l = lower.iloc[-1]
-    if pd.isna(u) or pd.isna(l) or (u - l) == 0:
-        return None
-    return float((close.iloc[-1] - l) / (u - l))

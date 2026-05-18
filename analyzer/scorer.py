@@ -6,6 +6,7 @@ eine Liste der empfohlenen Aktien zurück.
 
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,7 +20,8 @@ from analyzer.fundamental import check_fundamental
 from analyzer.confidence import compute_confidence
 from analyzer.exits import compute_exits, inject_external_signals
 from analyzer.upside import compute_upside
-from config import ANALYSIS
+from config import ANALYSIS, RELATIVE_STRENGTH
+from analyzer.price_cache import load_many as _cache_load_many, save_many as _cache_save_many
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,9 @@ def run_full_scan(progress_callback=None) -> dict:
                 except Exception as e:
                     logger.warning(f"Retry {ticker}: {e}")
 
+    # Gate-2-Post-Pass: RS-Perzentil-Ranking über alle analysierten Ticker
+    results = _apply_rs_percentile(results, market)
+
     # Sortierung: Empfehlungen zuerst, dann nach Tech-Score
     results.sort(key=lambda x: (not x["recommended"], -x["tech_score"]))
     all_results = results
@@ -128,15 +133,59 @@ def run_full_scan(progress_callback=None) -> dict:
     }
 
 
+def _apply_rs_percentile(results: list, market: dict) -> list:
+    """
+    Überschreibt gate_rs und recommended mit perzentil-basiertem RS-Ranking.
+
+    Statt eines harten >0-Schnitts qualifizieren nur Aktien im Top-X%-Perzentil
+    nach rs_score (= rs_3m + rs_6m) UND mit rs_6m >= rs_min_6m (absoluter Floor).
+    """
+    top_pct = RELATIVE_STRENGTH.get("rs_top_percentile", 0.33)
+    min_6m = RELATIVE_STRENGTH.get("rs_min_6m", 0.0)
+
+    # Nur Ergebnisse mit gültigem rs_score
+    valid = [r for r in results if r.get("rs", {}).get("rs_score") is not None]
+    if not valid:
+        return results
+
+    scores = [r["rs"]["rs_score"] for r in valid]
+    cutoff = float(np.percentile(scores, (1 - top_pct) * 100))
+    logger.info(f"RS-Perzentil-Cutoff (top {int(top_pct*100)}%): {cutoff:.2f}")
+
+    for r in results:
+        rs = r.get("rs", {})
+        rs_score = rs.get("rs_score")
+        rs_6m = rs.get("rs_6m") or 0.0
+
+        if rs_score is None:
+            gate_rs = False
+        else:
+            gate_rs = bool(rs_score >= cutoff and rs_6m >= min_6m)
+
+        r["gate_rs"] = gate_rs
+        r["rs"]["passed"] = gate_rs
+        r["recommended"] = gate_rs and r.get("gate_tech", False) and r.get("gate_fund", False)
+
+    return results
+
+
 def _batch_download(tickers: list) -> dict:
     """
     Lädt Kursdaten für alle Ticker in möglichst wenigen HTTP-Requests via yf.download().
     Gibt ein Dict {ticker: DataFrame} zurück. Ticker ohne ausreichende Daten fehlen.
     """
-    hist_cache = {}
+    # Zuerst Tages-Cache prüfen
+    hist_cache, to_download = _cache_load_many(tickers)
+    if hist_cache:
+        logger.info(f"Preis-Cache: {len(hist_cache)} Treffer, {len(to_download)} müssen geladen werden")
+
+    if not to_download:
+        return hist_cache
+
     # yf.download akzeptiert maximal ~500 Ticker pro Call — wir machen ggf. 2 Batches
     batch_size = 250
-    batches = [tickers[i:i + batch_size] for i in range(0, len(tickers), batch_size)]
+    batches = [to_download[i:i + batch_size] for i in range(0, len(to_download), batch_size)]
+    new_downloads = {}
 
     for batch_num, batch in enumerate(batches, 1):
         logger.info(f"Batch {batch_num}/{len(batches)}: {len(batch)} Ticker...")
@@ -161,7 +210,7 @@ def _batch_download(tickers: list) -> dict:
                         df = raw[ticker].copy()
                     df = df.dropna(how="all")
                     if len(df) >= 60:
-                        hist_cache[ticker] = df
+                        new_downloads[ticker] = df
                 except Exception:
                     pass
 
@@ -171,6 +220,9 @@ def _batch_download(tickers: list) -> dict:
         if batch_num < len(batches):
             time.sleep(2)  # kurze Pause zwischen Batches
 
+    # Neue Downloads cachen
+    _cache_save_many(new_downloads)
+    hist_cache.update(new_downloads)
     return hist_cache
 
 
@@ -205,8 +257,9 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
         # Gate 3: Technische Analyse
         tech = check_technical(hist)
 
-        # Gate 4: Fundamentalanalyse — nur wenn Gate 2+3 bestanden (spart ~450 HTTP-Calls)
-        if rs["passed"] and tech["passed"]:
+        # Gate 4: Fundamentalanalyse — nur wenn Gate 3 bestanden.
+        # Gate 2 (RS-Rang) wird erst im Post-Pass bestimmt; Gate 3 als Filter reicht.
+        if tech["passed"]:
             try:
                 if stock is None:
                     stock = yf.Ticker(ticker)

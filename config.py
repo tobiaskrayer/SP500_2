@@ -12,9 +12,10 @@ MARKET = {
 
 # --- Gate 2: Relative Stärke ---
 RELATIVE_STRENGTH = {
-    "period_short_days": 63,   # ~3 Monate
-    "period_long_days": 126,   # ~6 Monate
-    # Aktie muss den S&P500 in BEIDEN Zeiträumen übertreffen
+    "period_short_days": 63,    # ~3 Monate
+    "period_long_days": 126,    # ~6 Monate
+    "rs_top_percentile": 0.33,  # Aktie muss zu den besten 33% nach RS-Score (rs_3m+rs_6m) zählen
+    "rs_min_6m": 0.0,           # absoluter Floor: 6M-Momentum muss ≥ 0 sein
 }
 
 # --- Gate 3: Technische Analyse ---
@@ -23,7 +24,7 @@ TECHNICAL = {
     "rsi_max": 70,         # RSI nicht überkauft
     "bb_upper_pct": 0.95,  # Kurs darf nicht über 95% des BB-Bandes sein
     "volume_lookback": 20, # Tage für Volumen-Durchschnitt
-    "volume_factor": 1.0,  # Volumen muss mindestens 1.0x des Durchschnitts sein
+    "volume_factor": 1.2,  # Volumen muss mindestens 1.2x des Durchschnitts sein (echtes Interesse)
     "min_score": 0.70,     # Mindest-Score für Gate 3 (70%)
 }
 
@@ -32,7 +33,7 @@ FUNDAMENTAL = {
     "pe_max": 35,              # Maximales KGV
     "revenue_growth_min": 0.05, # Mindest-Umsatzwachstum (5%)
     "profit_margin_min": 0.08,  # Mindest-Gewinnmarge (8%)
-    "debt_to_equity_max": 100,  # Maximaler Verschuldungsgrad
+    "debt_to_equity_max": 150,  # Max. Verschuldungsgrad in % (yfinance-Format, 150 = 1,5x D/E-Ratio)
     "min_score": 0.60,          # Mindest-Score für Gate 4 (60%)
 }
 

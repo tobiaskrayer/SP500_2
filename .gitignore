@@ -29,5 +29,8 @@ Thumbs.db
 # Portfolio-Daten (jetzt in Supabase — nicht mehr im Repo)
 portfolio.json
 
+# Kurs-Cache (Laufzeit-Cache, soll das Repo nicht aufblähen)
+cache/prices/
+
 # Hinweis: cache/*.json wird NICHT ignoriert —
 # GitHub Actions committed die Analyseergebnisse täglich ins Repo.

@@ -6,8 +6,17 @@ Ergebnisse werden gecacht um API-Calls zu minimieren.
 
 import json
 import os
+import sys
 from datetime import date, datetime, timedelta
 import yfinance as yf
+
+# Kurs-Cache nutzen wenn verfügbar
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from analyzer.price_cache import load as _price_cache_load, save as _price_cache_save
+    _CACHE_AVAILABLE = True
+except ImportError:
+    _CACHE_AVAILABLE = False
 
 PERF_CACHE_FILE = os.path.join(os.path.dirname(__file__), "performance_cache.json")
 
@@ -61,10 +70,10 @@ def _compute_performance(ticker: str, rec_date_str: str, entry_price: float) -> 
         today = date.today()
         days_since = (today - rec_date).days
 
-        # Kursdaten ab Empfehlungsdatum laden (+ 100 Tage Buffer)
+        # Kursdaten — gecachte 1J-Daten slicen wenn verfügbar, sonst neu laden
         end_date = min(today, rec_date + timedelta(days=100))
-        hist = yf.Ticker(ticker).history(start=rec_date_str, end=str(end_date + timedelta(days=1)))
-        spy_hist = yf.Ticker("SPY").history(start=rec_date_str, end=str(end_date + timedelta(days=1)))
+        hist = _load_hist_for_perf(ticker, rec_date_str, end_date)
+        spy_hist = _load_hist_for_perf("SPY", rec_date_str, end_date)
 
         if hist is None or len(hist) < 2:
             return {}
@@ -152,3 +161,25 @@ def _save_cache(cache: dict):
             json.dump(cache, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
+
+
+def _load_hist_for_perf(ticker: str, start_str: str, end_date) -> object:
+    """
+    Lädt Kursdaten für die Performance-Berechnung.
+    Nutzt gecachte 1J-Daten (slice) wenn verfügbar, sonst direkter yfinance-Call.
+    """
+    from datetime import timedelta
+    if _CACHE_AVAILABLE:
+        cached = _price_cache_load(ticker)
+        if cached is not None:
+            try:
+                sliced = cached[cached.index >= start_str]
+                if len(sliced) >= 2:
+                    return sliced
+            except Exception:
+                pass
+    # Fallback: direkter Download
+    hist = yf.Ticker(ticker).history(start=start_str, end=str(end_date + timedelta(days=1)))
+    if _CACHE_AVAILABLE and hist is not None and len(hist) >= 60:
+        _price_cache_save(ticker, hist)
+    return hist

@@ -61,15 +61,19 @@ def check_market() -> dict:
         result["sp500_above_ma50"] = sp_price >= ma50 * (1 - MARKET["sp500_below_50ma_pct"])
         result["sp500_above_ma200"] = sp_price >= ma200 * (1 - MARKET["sp500_below_200ma_pct"])
 
-        # VIX Daten
+        # VIX Daten — 3-Tage-Mittel glättet Eintages-Spikes
         vix = yf.Ticker("^VIX")
         vix_hist = vix.history(period="5d")
-        vix_level = vix_hist["Close"].iloc[-1] if not vix_hist.empty else 99
-        result["vix"] = round(vix_level, 2)
+        if vix_hist.empty:
+            logger.warning("VIX-Daten nicht verfügbar — VIX-Kriterium wird übersprungen")
+            vix_level = None
+        else:
+            vix_level = float(vix_hist["Close"].tail(3).mean())
+        result["vix"] = round(vix_level, 2) if vix_level is not None else None
 
         # Entscheidung
         reasons = []
-        if vix_level > MARKET["vix_stop"]:
+        if vix_level is not None and vix_level > MARKET["vix_stop"]:
             reasons.append(f"VIX zu hoch ({vix_level:.1f} > {MARKET['vix_stop']})")
         if not result["sp500_above_ma200"]:
             reasons.append(f"S&P500 unter 200-Tage-MA ({sp_price:.0f} vs {ma200:.0f})")
@@ -81,9 +85,9 @@ def check_market() -> dict:
             result["reason"] = " | ".join(reasons)
         else:
             result["passed"] = True
-            result["warning"] = vix_level > MARKET["vix_max"]
-            if result["warning"]:
-                result["reason"] = f"VIX erhöht ({vix_level:.1f}) — vorsichtig handeln"
+            if vix_level is not None and vix_level > MARKET["vix_max"]:
+                result["warning"] = True
+                result["reason"] = f"VIX erhöht ({vix_level:.1f}, 3T-Mittel) — vorsichtig handeln"
 
     except Exception as e:
         logger.error(f"Marktfilter-Fehler: {e}")
