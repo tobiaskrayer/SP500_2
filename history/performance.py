@@ -32,7 +32,6 @@ def enrich_with_performance(log: list[dict]) -> list[dict]:
                       perf_vs_spy_1m, hit_1m, days_since
     """
     cache = _load_cache()
-    spy_cache = {}  # date -> SPY price at that date and forward
 
     flat = []
     for entry in log:

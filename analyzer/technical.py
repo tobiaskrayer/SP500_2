@@ -51,7 +51,7 @@ def check_technical(hist: pd.DataFrame) -> dict:
 
         # MACD
         macd_line, signal_line, histogram = macd(close)
-        sig_macd = (histogram.iloc[-1] > 0) and (macd_line.iloc[-1] > signal_line.iloc[-1])
+        sig_macd = histogram.iloc[-1] > 0
 
         # Bollinger Bands
         bb_ma, bb_upper, bb_lower = bollinger(close)

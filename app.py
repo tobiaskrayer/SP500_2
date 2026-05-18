@@ -139,19 +139,7 @@ def render_sidebar_secondary():
 def _start_scan():
     from scheduler import trigger_scan_background
 
-    progress_bar = st.sidebar.progress(0, text="Starte Scan...")
-    status_text = st.sidebar.empty()
-
-    def on_progress(done, total, ticker):
-        pct = done / total
-        progress_bar.progress(pct, text=f"{done}/{total} — {ticker}")
-
-    def on_complete(result):
-        st.session_state.scan_result = result
-        progress_bar.empty()
-        status_text.success("Scan abgeschlossen!")
-
-    trigger_scan_background(on_complete=on_complete)
+    trigger_scan_background()
     st.rerun()
 
 
@@ -260,9 +248,11 @@ def _render_market_status(market: dict):
         icon = "✅" if market.get("sp500_above_ma50") else "❌"
         st.write(f"{icon} S&P500 über 50-Tage-MA")
     with col3:
-        vix_ok = vix is not None and vix <= 25
-        icon = "✅" if vix_ok else "❌"
-        st.write(f"{icon} VIX unter 25")
+        if vix is None:
+            st.write("➖ VIX-Daten nicht verfügbar")
+        else:
+            icon = "✅" if vix <= 25 else "❌"
+            st.write(f"{icon} VIX unter 25")
 
 
 def _render_sp500_chart(hist: pd.Series, ma50: float, ma200: float):

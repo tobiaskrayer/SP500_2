@@ -26,6 +26,23 @@ from analyzer.price_cache import load_many as _cache_load_many, save_many as _ca
 logger = logging.getLogger(__name__)
 
 
+_SLIM_KEYS = ("ticker", "name", "sector", "recommended",
+              "gate_rs", "gate_tech", "gate_fund",
+              "tech_score", "fund_score", "combined_score",
+              "confidence_label", "price")
+
+
+def _slim(r: dict) -> dict:
+    s = {k: r.get(k) for k in _SLIM_KEYS}
+    rs = r.get("rs", {})
+    s["rs"] = {
+        "rs_3m": rs.get("rs_3m"),
+        "rs_6m": rs.get("rs_6m"),
+        "rs_score": rs.get("rs_score"),
+    }
+    return s
+
+
 def run_full_scan(progress_callback=None) -> dict:
     """
     Führt den vollständigen Scan aller S&P500-Aktien durch.
@@ -65,8 +82,10 @@ def run_full_scan(progress_callback=None) -> dict:
     total = len(tickers)
     logger.info(f"Starte Scan für {total} Titel...")
 
-    # S&P500-Kursdaten für relative Stärke
-    sp500_hist = _get_sp500_history()
+    # S&P500-Kursdaten für relative Stärke — aus check_market() wiederverwenden
+    sp500_hist = market.get("sp500_hist")
+    if sp500_hist is None or len(sp500_hist) < 60:
+        sp500_hist = _get_sp500_history()
 
     # Batch-Download aller Kursdaten — drastisch weniger HTTP-Requests als Einzelcalls
     hist_cache = _batch_download(tickers)
@@ -119,8 +138,8 @@ def run_full_scan(progress_callback=None) -> dict:
 
     # Sortierung: Empfehlungen zuerst, dann nach Tech-Score
     results.sort(key=lambda x: (not x["recommended"], -x["tech_score"]))
-    all_results = results
     recommendations = [r for r in results if r["recommended"]]
+    all_results = [_slim(r) for r in results]
 
     logger.info(f"Scan abgeschlossen: {len(recommendations)} Empfehlungen aus {len(results)} analysierten Titeln")
 

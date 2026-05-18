@@ -88,6 +88,9 @@ def check_market() -> dict:
             if vix_level is not None and vix_level > MARKET["vix_max"]:
                 result["warning"] = True
                 result["reason"] = f"VIX erhöht ({vix_level:.1f}, 3T-Mittel) — vorsichtig handeln"
+            elif vix_level is None:
+                result["warning"] = True
+                result["reason"] = "VIX-Daten nicht verfügbar — VIX-Check übersprungen"
 
     except Exception as e:
         logger.error(f"Marktfilter-Fehler: {e}")
