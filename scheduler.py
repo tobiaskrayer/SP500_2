@@ -105,10 +105,9 @@ def trigger_scan_background(on_complete=None):
         if _scan_running:
             logger.info("Scan läuft bereits")
             return
+        _scan_running = True  # innerhalb des Locks setzen — verhindert Race Condition
 
     def _run():
-        global _scan_running
-        _scan_running = True
         try:
             from analyzer.scorer import run_full_scan
             logger.info("Hintergrund-Scan gestartet")

@@ -43,7 +43,7 @@ def check_relative_strength(stock_hist: pd.Series, sp500_hist: pd.Series) -> dic
         def perf(series: pd.Series, days: int) -> float | None:
             if len(series) < days + 1:
                 return None
-            return (series.iloc[-1] / series.iloc[-days] - 1) * 100
+            return (series.iloc[-1] / series.iloc[-(days + 1)] - 1) * 100
 
         stock_3m = perf(stock_hist, short)
         stock_6m = perf(stock_hist, long)

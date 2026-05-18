@@ -5,10 +5,14 @@ Ergebnisse werden gecacht um API-Calls zu minimieren.
 """
 
 import json
+import logging
 import os
 import sys
+import tempfile
 from datetime import date, datetime, timedelta
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 # Kurs-Cache nutzen wenn verfügbar
 try:
@@ -127,7 +131,8 @@ def _compute_performance(ticker: str, rec_date_str: str, entry_price: float) -> 
             "days_since": days_since,
         }
 
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Performance-Berechnung fehlgeschlagen ({ticker} @ {rec_date_str}): {e}")
         return {}
 
 
@@ -150,16 +155,24 @@ def _load_cache() -> dict:
     try:
         with open(PERF_CACHE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Performance-Cache konnte nicht gelesen werden: {e}")
         return {}
 
 
 def _save_cache(cache: dict):
+    # Atomischer Schreibvorgang: erst temp-Datei, dann umbenennen.
+    # Verhindert korrupte Lesungen wenn die Performance-Seite gleichzeitig lädt.
     try:
-        with open(PERF_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache, f, indent=2, ensure_ascii=False)
-    except Exception:
-        pass
+        dir_ = os.path.dirname(PERF_CACHE_FILE)
+        os.makedirs(dir_, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp",
+                                         delete=False, encoding="utf-8") as tmp:
+            json.dump(cache, tmp, indent=2, ensure_ascii=False)
+            tmp_path = tmp.name
+        os.replace(tmp_path, PERF_CACHE_FILE)
+    except Exception as e:
+        logger.warning(f"Performance-Cache konnte nicht gespeichert werden: {e}")
 
 
 def _load_hist_for_perf(ticker: str, start_str: str, end_date) -> object:
