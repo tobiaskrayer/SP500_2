@@ -292,17 +292,20 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
         recommended = rs["passed"] and tech["passed"] and fund["passed"]
 
         # Additiv: Konfidenz-Ranking (ändert recommended nicht)
-        confidence = compute_confidence(tech["score"], fund["score"], rs)
+        _mkt = market or {}
+        vix = _mkt.get("vix")
+        confidence = compute_confidence(tech["score"], fund["score"], rs, vix=vix)
 
         # Additiv: Exit-Signale (externe Signale nachträglich setzen)
         current_price = tech["indicators"].get("price") if tech["indicators"] else None
-        exits = compute_exits(hist, entry_price=current_price)
+        exits = compute_exits(hist, entry_price=current_price, vix=vix)
         if exits["signals"]:
             rs_6m = rs.get("rs_6m", 0) or 0
-            _mkt = market or {}
             market_bearish = not _mkt.get("passed", True) or _mkt.get("warning", False)
+            _elevated = vix is not None and vix > 20
             inject_external_signals(
                 exits,
+                sell_threshold=2 if _elevated else None,
                 **{"6M-Rendite negativ": rs_6m < 0, "Marktumfeld bearish": market_bearish},
             )
 
@@ -330,6 +333,7 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
             # Konfidenz (additiv)
             "combined_score": confidence["combined_score"],
             "confidence_label": confidence["confidence_label"],
+            "regime": confidence.get("regime", "normal"),
             # Exit-Signale (additiv)
             "exits": exits,
             # Upside (additiv)

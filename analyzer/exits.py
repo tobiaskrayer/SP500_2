@@ -24,7 +24,7 @@ except ImportError:
 
 
 def compute_exits(hist: pd.DataFrame, entry_price: float = None,
-                  avg_entry_price: float = None) -> dict:
+                  avg_entry_price: float = None, vix: float = None) -> dict:
     """
     Berechnet ATR-basierte Stop-Loss/Take-Profit-Vorschläge und Exit-Signale
     aus dem übergebenen hist-DataFrame (OHLCV).
@@ -91,6 +91,16 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
         stop_label = "ATR-Stop (kein Einstandskurs hinterlegt)"
         take_profit = float(current_price + EXITS["atr_target_multiplier"] * atr_calc)
 
+    # Regime-abhängige Schwellen: bei erhöhtem VIX früher aussteigen
+    try:
+        from config import MARKET as _MARKET
+        _vix_max = _MARKET.get("vix_max", 20)
+    except ImportError:
+        _vix_max = 20
+    _elevated = vix is not None and vix > _vix_max
+    dd_pct = EXITS.get("trailing_drawdown_pct_elevated", 0.10) if _elevated else EXITS.get("trailing_drawdown_pct", 0.15)
+    sell_threshold = EXITS.get("sell_signals_elevated", 2) if _elevated else EXITS["sell_signals"]
+
     # Exit-Signale berechnen
     signals = {}
 
@@ -113,8 +123,7 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
         bb_pct is not None and bb_pct >= EXITS["bb_exit_pct"]
     )
 
-    # 5. Trailing Drawdown: Kurs ≥ X% unter 50-Tage-Hoch
-    dd_pct = EXITS.get("trailing_drawdown_pct", 0.15)
+    # 5. Trailing Drawdown: Kurs ≥ X% unter 50-Tage-Hoch (Schwelle regime-abhängig)
     signals[f"Trailing Drawdown (≥{int(dd_pct*100)}% vom 50T-Hoch)"] = _trailing_drawdown(
         close, threshold=dd_pct
     )
@@ -128,7 +137,7 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
 
     signal_count = sum(1 for v in signals.values() if v)
 
-    if signal_count >= EXITS["sell_signals"]:
+    if signal_count >= sell_threshold:
         recommendation = "Verkaufen erwägen"
     elif signal_count >= EXITS["warn_signals"]:
         recommendation = "Beobachten"
@@ -146,9 +155,10 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
     }
 
 
-def inject_external_signals(exits: dict, **signals: bool) -> dict:
+def inject_external_signals(exits: dict, sell_threshold: int = None, **signals: bool) -> dict:
     """
     Setzt externe Signale (RS, Markt) und berechnet signal_count + recommendation neu.
+    sell_threshold überschreibt EXITS["sell_signals"] (für Regime-Bewusstsein).
     Gibt das exits-Dict zurück (in-place modifiziert).
     """
     if not exits.get("signals"):
@@ -156,7 +166,8 @@ def inject_external_signals(exits: dict, **signals: bool) -> dict:
     for key, val in signals.items():
         exits["signals"][key] = bool(val)
     exits["signal_count"] = sum(1 for v in exits["signals"].values() if v)
-    if exits["signal_count"] >= EXITS["sell_signals"]:
+    threshold = sell_threshold if sell_threshold is not None else EXITS["sell_signals"]
+    if exits["signal_count"] >= threshold:
         exits["recommendation"] = "Verkaufen erwägen"
     elif exits["signal_count"] >= EXITS["warn_signals"]:
         exits["recommendation"] = "Beobachten"

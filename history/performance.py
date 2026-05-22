@@ -28,6 +28,53 @@ PERF_CACHE_FILE = os.path.join(os.path.dirname(__file__), "performance_cache.jso
 PERIODS = {"1w": 7, "1m": 30, "3m": 91}
 
 
+def enrich_with_current_exits(flat: list[dict]) -> list[dict]:
+    """
+    Reichert aktuelle Exit-Signale für noch offene Empfehlungen nach (days_since ≤ 91).
+    Fügt hinzu: current_exit_rec, current_exit_signals, current_price,
+                current_pnl_pct, stop_hit (ob Kurs jemals unter Stop-Loss fiel).
+    Nutzt den vorhandenen Preis-Cache um API-Calls zu minimieren.
+    """
+    try:
+        from analyzer.exits import compute_exits
+    except ImportError:
+        return flat
+
+    for rec in flat:
+        days_since = rec.get("days_since")
+        if days_since is None or days_since > 91:
+            continue
+        ticker = rec.get("ticker")
+        entry_price = rec.get("price")
+        rec_date = rec.get("rec_date", "")
+        if not ticker or not entry_price or not rec_date:
+            continue
+        try:
+            hist = _load_hist_for_perf(ticker, rec_date, date.today())
+            if hist is None or len(hist) < 15:
+                continue
+
+            exits = compute_exits(hist, entry_price=entry_price)
+            current_price = float(hist["Close"].iloc[-1])
+            current_pnl_pct = round((current_price / entry_price - 1) * 100, 2)
+
+            # Stop-Loss-Hit: war der Tages-Tiefstkurs jemals unter dem initialen Stop?
+            sl = exits.get("stop_loss")
+            stop_hit = False
+            if sl is not None and "Low" in hist.columns and len(hist) > 1:
+                stop_hit = bool(hist["Low"].min() <= sl)
+
+            rec["current_exit_rec"] = exits.get("recommendation")
+            rec["current_exit_signals"] = exits.get("signal_count", 0)
+            rec["current_price"] = current_price
+            rec["current_pnl_pct"] = current_pnl_pct
+            rec["stop_hit"] = stop_hit
+        except Exception as e:
+            logger.debug(f"Exit-Status {ticker}: {e}")
+
+    return flat
+
+
 def enrich_with_performance(log: list[dict]) -> list[dict]:
     """
     Reichert alle Empfehlungen im Log mit Performance-Daten an.

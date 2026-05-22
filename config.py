@@ -44,6 +44,15 @@ CONFIDENCE = {
     # darunter (aber alle Gates bestanden) → "Watch"
 }
 
+# --- Regime-bewusstes Scoring ---
+# Wenn VIX > MARKET["vix_max"] (>20): erhöhtes Regime → Fundamentals stärker gewichten,
+# technische Momentum-Signale weniger (kurzfristig unzuverlässiger), RS etwas mehr
+# (Titel die trotz Marktdruck outperformen sind robuster).
+REGIME = {
+    "normal":   {"w_tech": 0.40, "w_fund": 0.40, "w_rs": 0.20},
+    "elevated": {"w_tech": 0.30, "w_fund": 0.45, "w_rs": 0.25},
+}
+
 # --- Exit-Signale ---
 EXITS = {
     "atr_stop_multiplier": 2.0,      # Stop-Loss = entry - 2 * ATR(14)
@@ -51,9 +60,11 @@ EXITS = {
     "rsi_overbought": 75,            # RSI-Grenze für Exit-Signal
     "bb_exit_pct": 0.95,             # Kurs ≥ 95% BB-Band → Exit-Signal
     "macd_bearish_days": 3,          # MACD muss X Tage durchgehend unter Signallinie liegen
-    "trailing_drawdown_pct": 0.15,   # Kurs ≥ 15% unter 50-Tage-Hoch → Exit-Signal
+    "trailing_drawdown_pct": 0.15,   # Kurs ≥ 15% unter 50-Tage-Hoch → Exit-Signal (normal)
+    "trailing_drawdown_pct_elevated": 0.10,  # Strenger bei erhöhtem VIX-Regime
     "warn_signals": 1,               # Ab X aktiven Signalen → "Beobachten"
-    "sell_signals": 3,               # Ab X aktiven Signalen → "Verkaufen erwägen"
+    "sell_signals": 3,               # Ab X aktiven Signalen → "Verkaufen erwägen" (normal)
+    "sell_signals_elevated": 2,      # Strenger bei erhöhtem VIX-Regime
 }
 
 # --- Erwartetes Upside (separate Magnitude-Kennzahl) ---
