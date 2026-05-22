@@ -2061,6 +2061,11 @@ def _render_sweep_results(sweep: dict):
         st.code(snippet, language="python")
 
 
+def _snap_to_options(val, options):
+    """Rundet einen Wert auf die nächstliegende Option (für select_slider)."""
+    return min(options, key=lambda x: abs(x - val))
+
+
 def _render_playground(years: int, step_weeks: int):
     """Interaktive Spielwiese: Parameter selbst wählen, historische Performance simulieren."""
     from backtest.runner import run_custom_backtest, apply_overrides, clear_overrides, load_overrides
@@ -2073,14 +2078,18 @@ def _render_playground(years: int, step_weeks: int):
 
     active = load_overrides()
 
+    _score_opts = [0.50, 0.67, 0.83, 1.0]
+    _rs_pct_opts = [0.10, 0.15, 0.20, 0.25, 0.33, 0.40, 0.50]
+
     with st.form("playground_form"):
         st.subheader("Gate 3 — Technische Analyse")
         pg1, pg2, pg3, pg4 = st.columns(4)
         with pg1:
+            _ms_raw = float(active.get("min_score", _cfg.TECHNICAL.get("min_score", 0.70)))
             p_min_score = st.select_slider(
                 "Min. Tech-Score",
-                options=[0.50, 0.67, 0.83, 1.0],
-                value=float(active.get("min_score", _cfg.TECHNICAL.get("min_score", 0.70))),
+                options=_score_opts,
+                value=_snap_to_options(_ms_raw, _score_opts),
                 format_func=lambda x: f"{int(x*100)}% ({int(x*6)}/6 Signale)",
             )
         with pg2:
@@ -2104,10 +2113,11 @@ def _render_playground(years: int, step_weeks: int):
         st.subheader("Gate 2 — Relative Stärke")
         pg5, pg6 = st.columns(2)
         with pg5:
+            _rsp_raw = float(active.get("rs_top_percentile", _cfg.RELATIVE_STRENGTH.get("rs_top_percentile", 0.33)))
             p_rs_pct = st.select_slider(
                 "RS-Perzentil (Top-X% nach rs_score)",
-                options=[0.10, 0.15, 0.20, 0.25, 0.33, 0.40, 0.50],
-                value=float(active.get("rs_top_percentile", _cfg.RELATIVE_STRENGTH.get("rs_top_percentile", 0.33))),
+                options=_rs_pct_opts,
+                value=_snap_to_options(_rsp_raw, _rs_pct_opts),
                 format_func=lambda x: f"Top {int(x*100)}%",
             )
         with pg6:
