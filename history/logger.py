@@ -9,6 +9,21 @@ import tempfile
 import time
 from datetime import date, datetime
 
+
+def _json_default(obj):
+    """Fallback-Serialisierung für numpy-Typen, die json nicht nativ kennt."""
+    try:
+        import numpy as np
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return None if np.isnan(obj) else float(obj)
+    except ImportError:
+        pass
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
 LOG_FILE = os.path.join(os.path.dirname(__file__), "recommendations_log.json")
 
 
@@ -52,7 +67,7 @@ def append_scan_result(result: dict):
     try:
         with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp",
                                          delete=False, encoding="utf-8") as tmp:
-            json.dump(log, tmp, indent=2, ensure_ascii=False)
+            json.dump(log, tmp, indent=2, ensure_ascii=False, default=_json_default)
             tmp_path = tmp.name
         os.replace(tmp_path, LOG_FILE)
     except Exception:
