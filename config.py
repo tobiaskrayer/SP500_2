@@ -89,3 +89,22 @@ ANALYSIS = {
     "history_days": 365,   # Kursdaten der letzten 365 Tage laden
     "max_workers": 3,      # Parallele Downloads (yfinance) — niedrig halten gegen Rate-Limit
 }
+
+# --- Parameter-Overrides (aus Backtest-Sweep oder Spielwiese) ---
+# backtest/param_overrides.json überschreibt die obigen Werte wenn vorhanden.
+# Schreiben via backtest.runner.apply_overrides(); Löschen via clear_overrides().
+import json as _json
+import os as _os
+_overrides_path = _os.path.join(_os.path.dirname(__file__), "backtest", "param_overrides.json")
+if _os.path.exists(_overrides_path):
+    try:
+        with open(_overrides_path, "r", encoding="utf-8") as _f:
+            _ov = _json.load(_f)
+        for _k in ("min_score", "rsi_min", "rsi_max", "volume_factor"):
+            if _k in _ov:
+                TECHNICAL[_k] = _ov[_k]
+        for _k in ("rs_top_percentile", "rs_min_6m"):
+            if _k in _ov:
+                RELATIVE_STRENGTH[_k] = _ov[_k]
+    except Exception:
+        pass

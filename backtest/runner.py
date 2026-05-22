@@ -1,12 +1,13 @@
 """
 Historischer Backtest: simuliert Gates 1+2+3 (Markt, Relative Stärke, Technik)
-über historische Kursdaten der letzten 1–3 Jahre.
+über historische Kursdaten.
 
 WICHTIG: Fundamentaldaten (Gate 4) können nicht historisch backtested werden —
 yfinance liefert nur aktuelle Kennzahlen, keine historischen Snapshots.
 Der Backtest testet ausschließlich die technisch-momentum-basierte Komponente.
 """
 
+import itertools
 import json
 import logging
 import os
@@ -22,8 +23,19 @@ logger = logging.getLogger(__name__)
 
 _BACKTEST_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache", "backtest")
 _RESULTS_FILE = os.path.join(_BACKTEST_CACHE_DIR, "results.json")
+_SWEEP_RESULTS_FILE = os.path.join(_BACKTEST_CACHE_DIR, "sweep_results.json")
 _PRICE_CACHE_DIR = os.path.join(_BACKTEST_CACHE_DIR, "prices")
 _PRICE_CACHE_MAX_AGE_DAYS = 7
+_OVERRIDES_FILE = os.path.join(os.path.dirname(__file__), "param_overrides.json")
+
+_DEFAULT_GRID = {
+    "min_score":          [0.67, 0.83, 1.0],
+    "rsi_min":            [40, 45, 50],
+    "rsi_max":            [65, 70, 75],
+    "volume_factor":      [1.0, 1.2, 1.5],
+    "rs_top_percentile":  [0.20, 0.25, 0.33],
+    "rs_min_6m":          [0.0, 3.0],
+}
 
 try:
     from config import RELATIVE_STRENGTH, TECHNICAL
@@ -38,7 +50,7 @@ except ImportError:
     _RSI_MIN, _RSI_MAX, _VOL_FACTOR = 45, 70, 1.2
 
 
-# ── Preis-Cache (3Y OHLCV, per Ticker) ───────────────────────────────────────
+# ── Preis-Cache (per Ticker) ─────────────────────────────────────────────────
 
 def _cache_path(ticker: str) -> str:
     os.makedirs(_PRICE_CACHE_DIR, exist_ok=True)
@@ -67,7 +79,7 @@ def _cache_save(ticker: str, df: pd.DataFrame):
 
 
 def _download_prices(tickers: list[str], years: int, progress_callback=None) -> dict[str, pd.DataFrame]:
-    """Lädt 3Y-OHLCV für alle Ticker — nutzt Tages-Cache um Wiederholungen zu vermeiden."""
+    """Lädt OHLCV für alle Ticker — nutzt Tages-Cache um Wiederholungen zu vermeiden."""
     cached = {}
     to_download = []
 
@@ -108,12 +120,13 @@ def _download_prices(tickers: list[str], years: int, progress_callback=None) -> 
     return cached
 
 
-# ── Indikator-Vorberechnung (vektorisiert) ────────────────────────────────────
+# ── Indikator-Vorberechnung ─────────────────────────────────────────────────
 
 def _precompute(hist: pd.DataFrame) -> pd.DataFrame:
     """
     Berechnet alle Gate-2/3-Indikatoren als komplette Zeitreihe.
-    Gibt DataFrame zurück: eine Zeile pro Handelstag, Spalten = Indikatoren.
+    Enthält sowohl rohe Felder (rsi, vol_ratio) für den Sweep als auch
+    config-abhängige Felder (tech_score) für den Standard-Backtest.
     """
     close = hist["Close"]
     vol = hist.get("Volume", pd.Series(dtype=float))
@@ -123,20 +136,17 @@ def _precompute(hist: pd.DataFrame) -> pd.DataFrame:
     ma50 = close.rolling(50).mean()
     ma200 = close.rolling(200).mean()
 
-    # RSI(14)
     delta = close.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     rsi = 100 - (100 / (1 + gain / loss.replace(0, np.nan)))
 
-    # MACD: Histogramm > 0 → bullisch
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     macd_bull = (macd_line > signal_line)
 
-    # Bollinger 20d — Kurs < 95% Bandbreite
     bb_ma = close.rolling(20).mean()
     bb_std = close.rolling(20).std()
     bb_lower = bb_ma - 2 * bb_std
@@ -145,15 +155,17 @@ def _precompute(hist: pd.DataFrame) -> pd.DataFrame:
     bb_pct = (close - bb_lower) / bb_range
     bb_ok = bb_pct < 0.95
 
-    # Volumen
     vol_avg = vol.rolling(20).mean() if len(vol) else pd.Series(dtype=float)
-    vol_elevated = (vol > vol_avg * _VOL_FACTOR) if len(vol_avg) else pd.Series(False, index=close.index)
+    if len(vol_avg):
+        vol_ratio = (vol / vol_avg.replace(0, np.nan)).fillna(0).replace(np.inf, 0)
+    else:
+        vol_ratio = pd.Series(0.0, index=close.index)
 
     above_ma50 = close > ma50
     above_ma200 = close > ma200
     rsi_ok = (rsi >= _RSI_MIN) & (rsi <= _RSI_MAX)
+    vol_elevated = vol_ratio > _VOL_FACTOR
 
-    # Tech-Score: 6 Signale / 6
     tech_score = (
         above_ma50.astype(float)
         + above_ma200.astype(float)
@@ -173,16 +185,38 @@ def _precompute(hist: pd.DataFrame) -> pd.DataFrame:
         "rsi_ok": rsi_ok,
         "macd_bull": macd_bull,
         "bb_ok": bb_ok,
+        "vol_ratio": vol_ratio,
         "vol_elevated": vol_elevated,
         "tech_score": tech_score,
     }, index=hist.index)
 
 
+def _tech_score_from_row(row, rsi_min: float, rsi_max: float, vol_factor: float) -> float | None:
+    """Berechnet tech_score für eine einzelne Zeile mit variablen Schwellenwerten."""
+    try:
+        rsi = float(row.get("rsi", float("nan")))
+        if pd.isna(rsi):
+            return None
+        rsi_ok = rsi_min <= rsi <= rsi_max
+        vol_ok = float(row.get("vol_ratio", 0) or 0) > vol_factor
+        return (
+            float(bool(row.get("above_ma50", False)))
+            + float(bool(row.get("above_ma200", False)))
+            + float(rsi_ok)
+            + float(bool(row.get("macd_bull", False)))
+            + float(bool(row.get("bb_ok", False)))
+            + float(vol_ok)
+        ) / 6.0
+    except Exception:
+        return None
+
+
+# ── Hilfs-Funktionen ─────────────────────────────────────────────────────────
+
 def _slice_to_date(series_or_df, dt: date):
     """Schneidet eine Pandas-Series/DataFrame bis einschließlich dt ab."""
     dt_str = str(dt)
     try:
-        # DatetimeIndex mit oder ohne Timezone
         idx = series_or_df.index
         if hasattr(idx, "tz") and idx.tz is not None:
             mask = idx.normalize().tz_localize(None) <= pd.Timestamp(dt_str)
@@ -222,36 +256,18 @@ def _forward_return(indicator_df: pd.DataFrame, from_date: date, days: int) -> f
         return None
 
 
-# ── Haupt-Simulation ──────────────────────────────────────────────────────────
+# ── Gemeinsames Setup ─────────────────────────────────────────────────────────
 
-def run_backtest(years: int = 2, step_weeks: int = 2, progress_callback=None) -> dict:
+def _build_precomputed(years: int, step_weeks: int,
+                       progress_callback=None) -> tuple[dict, object, list, list]:
     """
-    Simuliert den wöchentlichen Scan über die letzten `years` Jahre.
-
-    Backtested: Gate 1 (Marktfilter), Gate 2 (Relative Stärke), Gate 3 (Technik).
-    Nicht backtested: Gate 4 (Fundamentaldaten — keine historischen Snapshots).
-
-    progress_callback: callable(phase, current, total, info)
-      phase: "download" | "precompute" | "simulate"
-
-    Gibt zurück:
-    {
-        "computed_at": str, "years": int, "step_weeks": int,
-        "dates_simulated": int, "dates_skipped_bearish": int,
-        "total_trades": int,
-        "hit_rate_1m": float | None, "avg_return_1m": float | None,
-        "avg_vs_spy_1m": float | None, "sharpe_1m": float | None,
-        "hit_rate_3m": float | None, "avg_return_3m": float | None,
-        "max_drawdown_1m": float | None,
-        "by_month": list[dict],
-        "by_sector": list[dict],   # leer (kein hist. Sektor verfügbar)
-        "trades": list[dict],
-    }
+    Lädt + precomputed alle Ticker einmalig.
+    Gibt (precomputed, spy_ind, bt_dates, universe) zurück.
+    Bei Fehler enthält precomputed/spy_ind None-Werte.
     """
     os.makedirs(_BACKTEST_CACHE_DIR, exist_ok=True)
 
-    # Simulationsdaten
-    end_date = date.today() - timedelta(days=35)   # 35 Tage Puffer für 1M-Return
+    end_date = date.today() - timedelta(days=35)
     start_date = end_date - timedelta(days=365 * years)
 
     bt_dates = []
@@ -261,26 +277,21 @@ def run_backtest(years: int = 2, step_weeks: int = 2, progress_callback=None) ->
             bt_dates.append(d)
         d += timedelta(weeks=step_weeks)
 
-    logger.info(f"Backtest: {len(bt_dates)} Simulationsdaten ({start_date} bis {end_date})")
-
-    # Tickerliste
     try:
         from analyzer.universe import get_sp500_tickers
         universe = get_sp500_tickers()
     except Exception:
-        logger.warning("Tickerliste nicht verfügbar — Backtest abgebrochen")
-        return _empty_result(years, step_weeks)
+        logger.warning("Tickerliste nicht verfügbar")
+        return {}, None, bt_dates, []
 
     all_tickers = universe + ["SPY"]
-
-    # Preise laden
     hist_raw = _download_prices(all_tickers, years, progress_callback)
+
     spy_raw = hist_raw.get("SPY")
     if spy_raw is None or len(spy_raw) < 200:
-        logger.error("SPY-Daten fehlen — Backtest abgebrochen")
-        return _empty_result(years, step_weeks)
+        logger.error("SPY-Daten fehlen")
+        return {}, None, bt_dates, universe
 
-    # Indikatoren vorberechnen (vektorisiert — einmalig pro Ticker)
     total_tickers = len(hist_raw)
     precomputed: dict[str, pd.DataFrame] = {}
     for i, (ticker, df) in enumerate(hist_raw.items()):
@@ -292,20 +303,31 @@ def run_backtest(years: int = 2, step_weeks: int = 2, progress_callback=None) ->
             pass
 
     spy_ind = precomputed.get("SPY")
-    if spy_ind is None:
-        logger.error("SPY-Indikator fehlen")
-        return _empty_result(years, step_weeks)
+    return precomputed, spy_ind, bt_dates, universe
 
-    # Simulation
+
+# ── Simulations-Kern ─────────────────────────────────────────────────────────
+
+def _simulate(precomputed: dict, spy_ind: pd.DataFrame,
+              bt_dates: list, params: dict, universe: list | None = None) -> tuple[list, int, int]:
+    """
+    Führt Gate-1/2/3-Check für alle bt_dates durch.
+    Gibt (trades, dates_simulated, dates_skipped_bearish) zurück.
+    """
+    min_score     = params.get("min_score",          _TECH_MIN)
+    rsi_min       = params.get("rsi_min",            _RSI_MIN)
+    rsi_max       = params.get("rsi_max",            _RSI_MAX)
+    vol_factor    = params.get("volume_factor",      _VOL_FACTOR)
+    rs_top_pct    = params.get("rs_top_percentile",  _RS_TOP_PCT)
+    rs_min_6m     = params.get("rs_min_6m",          _RS_MIN_6M)
+
+    _universe = universe if universe is not None else [t for t in precomputed if t != "SPY"]
+
     trades = []
     dates_simulated = 0
     dates_skipped = 0
 
-    for sim_i, bt_date in enumerate(bt_dates):
-        if progress_callback and sim_i % 5 == 0:
-            progress_callback("simulate", sim_i, len(bt_dates), str(bt_date))
-
-        # Gate 1: Marktcheck
+    for bt_date in bt_dates:
         spy_slice = _slice_to_date(spy_ind, bt_date)
         if len(spy_slice) < 200:
             dates_skipped += 1
@@ -315,7 +337,6 @@ def run_backtest(years: int = 2, step_weeks: int = 2, progress_callback=None) ->
             dates_skipped += 1
             continue
 
-        # S&P500-Returns für RS-Berechnung
         spy_close_slice = spy_slice["close"]
         sp_ret_3m = _return_since(spy_close_slice, 63)
         sp_ret_6m = _return_since(spy_close_slice, 126)
@@ -326,7 +347,7 @@ def run_backtest(years: int = 2, step_weeks: int = 2, progress_callback=None) ->
         dates_simulated += 1
         candidates = []
 
-        for ticker in universe:
+        for ticker in _universe:
             ind = precomputed.get(ticker)
             if ind is None:
                 continue
@@ -334,14 +355,11 @@ def run_backtest(years: int = 2, step_weeks: int = 2, progress_callback=None) ->
             if len(ind_slice) < 200:
                 continue
             row = ind_slice.iloc[-1]
-            if pd.isna(row["tech_score"]):
+
+            tech_score = _tech_score_from_row(row, rsi_min, rsi_max, vol_factor)
+            if tech_score is None or tech_score < min_score:
                 continue
 
-            # Gate 3 vorab
-            if float(row["tech_score"]) < _TECH_MIN:
-                continue
-
-            # Gate 2: RS
             close_slice = ind_slice["close"]
             ret_3m = _return_since(close_slice, 63)
             ret_6m = _return_since(close_slice, 126)
@@ -349,31 +367,27 @@ def run_backtest(years: int = 2, step_weeks: int = 2, progress_callback=None) ->
                 continue
 
             rs_3m = ret_3m - sp_ret_3m
-            rs_6m = ret_6m - sp_ret_6m
-            rs_score = rs_3m + rs_6m
+            rs_6m_val = ret_6m - sp_ret_6m
 
             candidates.append({
-                "ticker": ticker,
-                "price": float(row["close"]),
-                "rs_score": rs_score,
-                "rs_6m": rs_6m,
-                "tech_score": float(row["tech_score"]),
+                "ticker":     ticker,
+                "price":      float(row["close"]),
+                "rs_score":   rs_3m + rs_6m_val,
+                "rs_6m":      rs_6m_val,
+                "tech_score": tech_score,
             })
 
         if not candidates:
             continue
 
-        # RS-Perzentil-Cutoff
-        cutoff = float(np.percentile([c["rs_score"] for c in candidates], (1 - _RS_TOP_PCT) * 100))
-        recommended = [
-            c for c in candidates
-            if c["rs_score"] >= cutoff and c["rs_6m"] >= _RS_MIN_6M
-        ]
+        cutoff = float(np.percentile([c["rs_score"] for c in candidates],
+                                      (1 - rs_top_pct) * 100))
+        recommended = [c for c in candidates
+                       if c["rs_score"] >= cutoff and c["rs_6m"] >= rs_min_6m]
 
         if not recommended:
             continue
 
-        # Forward-Returns berechnen
         spy_perf_1m = _forward_return(spy_ind, bt_date, 30)
         spy_perf_3m = _forward_return(spy_ind, bt_date, 90)
 
@@ -384,26 +398,377 @@ def run_backtest(years: int = 2, step_weeks: int = 2, progress_callback=None) ->
             p1m = _forward_return(ind, bt_date, 30)
             p3m = _forward_return(ind, bt_date, 90)
             trades.append({
-                "date": str(bt_date),
-                "ticker": c["ticker"],
+                "date":        str(bt_date),
+                "ticker":      c["ticker"],
                 "entry_price": c["price"],
-                "tech_score": c["tech_score"],
-                "rs_score": c["rs_score"],
-                "rs_6m": c["rs_6m"],
-                "perf_1m": p1m,
-                "perf_3m": p3m,
-                "spy_1m": spy_perf_1m,
-                "spy_3m": spy_perf_3m,
-                "vs_spy_1m": round(p1m - spy_perf_1m, 2) if (p1m is not None and spy_perf_1m is not None) else None,
-                "hit_1m": p1m > 0 if p1m is not None else None,
-                "hit_3m": p3m > 0 if p3m is not None else None,
+                "tech_score":  c["tech_score"],
+                "rs_score":    c["rs_score"],
+                "rs_6m":       c["rs_6m"],
+                "perf_1m":     p1m,
+                "perf_3m":     p3m,
+                "spy_1m":      spy_perf_1m,
+                "spy_3m":      spy_perf_3m,
+                "vs_spy_1m":   round(p1m - spy_perf_1m, 2) if (p1m is not None and spy_perf_1m is not None) else None,
+                "hit_1m":      p1m > 0 if p1m is not None else None,
+                "hit_3m":      p3m > 0 if p3m is not None else None,
             })
 
-    # Statistiken
+    return trades, dates_simulated, dates_skipped
+
+
+# ── Haupt-Backtest ────────────────────────────────────────────────────────────
+
+def run_backtest(years: int = 2, step_weeks: int = 2, progress_callback=None) -> dict:
+    """
+    Simuliert den wöchentlichen Scan über die letzten `years` Jahre.
+
+    Backtested: Gate 1 (Marktfilter), Gate 2 (Relative Stärke), Gate 3 (Technik).
+    Nicht backtested: Gate 4 (Fundamentaldaten — keine historischen yfinance-Snapshots).
+
+    progress_callback: callable(phase, current, total, info)
+      phase: "download" | "precompute" | "simulate"
+    """
+    precomputed, spy_ind, bt_dates, universe = _build_precomputed(years, step_weeks, progress_callback)
+
+    if spy_ind is None:
+        logger.error("SPY-Indikator fehlt — Backtest abgebrochen")
+        return _empty_result(years, step_weeks)
+
+    logger.info(f"Backtest: {len(bt_dates)} Simulationsdaten ({years} Jahre)")
+
+    if progress_callback:
+        progress_callback("simulate", 0, len(bt_dates), "Starte Simulation...")
+
+    default_params = {
+        "min_score":         _TECH_MIN,
+        "rsi_min":           _RSI_MIN,
+        "rsi_max":           _RSI_MAX,
+        "volume_factor":     _VOL_FACTOR,
+        "rs_top_percentile": _RS_TOP_PCT,
+        "rs_min_6m":         _RS_MIN_6M,
+    }
+
+    trades, dates_simulated, dates_skipped = _simulate(
+        precomputed, spy_ind, bt_dates, default_params, universe
+    )
+
     result = _compute_stats(trades, dates_simulated, dates_skipped, years, step_weeks)
     _save_results(result)
     return result
 
+
+# ── Custom-Backtest (Spielwiese) ──────────────────────────────────────────────
+
+def run_custom_backtest(years: int = 2, step_weeks: int = 2,
+                        params: dict | None = None,
+                        progress_callback=None) -> dict:
+    """
+    Einzelner Backtest-Lauf mit benutzerdefinierten Parametern.
+    Nutzt denselben Preis-Cache wie run_backtest — nach dem ersten
+    Download also sehr schnell.
+    """
+    precomputed, spy_ind, bt_dates, universe = _build_precomputed(years, step_weeks, progress_callback)
+
+    if spy_ind is None:
+        return _empty_result(years, step_weeks)
+
+    _params = {
+        "min_score":         _TECH_MIN,
+        "rsi_min":           _RSI_MIN,
+        "rsi_max":           _RSI_MAX,
+        "volume_factor":     _VOL_FACTOR,
+        "rs_top_percentile": _RS_TOP_PCT,
+        "rs_min_6m":         _RS_MIN_6M,
+        **(params or {}),
+    }
+
+    trades, dates_simulated, dates_skipped = _simulate(
+        precomputed, spy_ind, bt_dates, _params, universe
+    )
+    return _compute_stats(trades, dates_simulated, dates_skipped, years, step_weeks)
+
+
+# ── Parameter-Sweep ───────────────────────────────────────────────────────────
+
+def run_param_sweep(years: int = 3, step_weeks: int = 2,
+                    grid: dict | None = None,
+                    objective: str = "avg_vs_spy_1m",
+                    train_frac: float = 0.6,
+                    min_trades: int = 30,
+                    progress_callback=None) -> dict:
+    """
+    Grid-Search über Gate-2/3-Parameter.
+
+    Optimiert auf der älteren `train_frac` der Zeitreihe, validiert auf
+    der neueren (Train/Test-Split gegen Overfitting).
+
+    Gibt zurück: ranked Kombinationen, bestes Ergebnis, Ist-Konfiguration.
+    """
+    precomputed, spy_ind, bt_dates, universe = _build_precomputed(years, step_weeks, progress_callback)
+
+    if spy_ind is None:
+        return _empty_sweep_result(years, step_weeks, objective)
+
+    logger.info(f"Sweep: {len(bt_dates)} Simulations-Dates über {years} Jahre")
+
+    # Train/Test-Split (chronologisch)
+    split_idx = int(len(bt_dates) * train_frac)
+    train_dates = bt_dates[:split_idx]
+    test_dates = bt_dates[split_idx:]
+
+    # Vorberechnete Date-Daten (einmalig für alle bt_dates — Haupt-Effizienz-Gewinn)
+    if progress_callback:
+        progress_callback("sweep_precompute", 0, len(bt_dates), "Vorberechnung...")
+    date_data = _precompute_date_data(precomputed, spy_ind, bt_dates, universe)
+
+    # Grid aufbauen
+    _grid = grid or _DEFAULT_GRID
+    keys = list(_grid.keys())
+    combos = list(itertools.product(*[_grid[k] for k in keys]))
+    total_combos = len(combos)
+    logger.info(f"Sweep: {total_combos} Kombinationen, {len(train_dates)} Train / {len(test_dates)} Test")
+
+    current_config = {
+        "min_score":         _TECH_MIN,
+        "rsi_min":           _RSI_MIN,
+        "rsi_max":           _RSI_MAX,
+        "volume_factor":     _VOL_FACTOR,
+        "rs_top_percentile": _RS_TOP_PCT,
+        "rs_min_6m":         _RS_MIN_6M,
+    }
+
+    ranked = []
+    for ci, combo_vals in enumerate(combos):
+        params = dict(zip(keys, combo_vals))
+        # Defaults für nicht im Grid enthaltene Keys
+        for k, v in current_config.items():
+            params.setdefault(k, v)
+
+        if progress_callback and ci % 20 == 0:
+            progress_callback("sweep", ci, total_combos, f"Kombi {ci+1}/{total_combos}")
+
+        try:
+            train_trades = _simulate_from_cache(date_data, train_dates, params)
+            train_stats = _compute_stats(train_trades, len(train_dates), 0, years, step_weeks)
+
+            if (train_stats.get("measurable_1m") or 0) < min_trades:
+                continue
+
+            test_trades = _simulate_from_cache(date_data, test_dates, params)
+            test_stats = _compute_stats(test_trades, len(test_dates), 0, years, step_weeks)
+
+            train_obj = train_stats.get(objective)
+            test_obj = test_stats.get(objective)
+            if train_obj is None:
+                continue
+
+            overfit_gap = round(train_obj - test_obj, 2) if test_obj is not None else None
+
+            ranked.append({
+                **params,
+                f"train_{objective}": round(train_obj, 2),
+                f"test_{objective}":  round(test_obj, 2) if test_obj is not None else None,
+                "overfit_gap":        overfit_gap,
+                "train_trades":       train_stats.get("measurable_1m", 0),
+                "test_trades":        test_stats.get("measurable_1m", 0),
+                "train_hit_1m":       train_stats.get("hit_rate_1m"),
+                "test_hit_1m":        test_stats.get("hit_rate_1m"),
+                "train_sharpe":       train_stats.get("sharpe_1m"),
+                "test_sharpe":        test_stats.get("sharpe_1m"),
+            })
+        except Exception as e:
+            logger.debug(f"Sweep Kombi {ci}: {e}")
+
+    ranked.sort(key=lambda x: x.get(f"train_{objective}") or float("-inf"), reverse=True)
+    best = {k: v for k, v in ranked[0].items() if k in current_config} if ranked else None
+
+    if progress_callback:
+        progress_callback("sweep", total_combos, total_combos, "Abgeschlossen")
+
+    result = {
+        "computed_at":        datetime.now().isoformat(),
+        "years":              years,
+        "step_weeks":         step_weeks,
+        "objective":          objective,
+        "train_frac":         train_frac,
+        "total_combos_tested": len(combos),
+        "valid_combos":       len(ranked),
+        "current_config":     current_config,
+        "best":               best,
+        "ranked":             ranked[:50],
+    }
+    _save_sweep_results(result)
+    return result
+
+
+def _precompute_date_data(precomputed: dict, spy_ind: pd.DataFrame,
+                           bt_dates: list, universe: list) -> dict:
+    """
+    Precomputed alle date-spezifischen Daten (Slices, RS-Returns, Forward-Returns)
+    einmalig für alle Daten. Der Combo-Loop greift nur noch auf diesen Cache zu
+    (O(1) Lookups statt teurer Slice-Operationen pro Kombination).
+    """
+    result = {}
+    for bt_date in bt_dates:
+        spy_slice = _slice_to_date(spy_ind, bt_date)
+        if len(spy_slice) < 200:
+            result[bt_date] = None
+            continue
+        spy_row = spy_slice.iloc[-1]
+        if not (spy_row["above_ma50"] and spy_row["above_ma200"]):
+            result[bt_date] = None
+            continue
+
+        spy_close_slice = spy_slice["close"]
+        sp_ret_3m = _return_since(spy_close_slice, 63)
+        sp_ret_6m = _return_since(spy_close_slice, 126)
+        if sp_ret_3m is None or sp_ret_6m is None:
+            result[bt_date] = None
+            continue
+
+        spy_perf_1m = _forward_return(spy_ind, bt_date, 30)
+        spy_perf_3m = _forward_return(spy_ind, bt_date, 90)
+
+        ticker_data = {}
+        for ticker in universe:
+            ind = precomputed.get(ticker)
+            if ind is None:
+                continue
+            ind_slice = _slice_to_date(ind, bt_date)
+            if len(ind_slice) < 200:
+                continue
+            row = ind_slice.iloc[-1]
+            if pd.isna(row.get("rsi", float("nan"))):
+                continue
+
+            close_slice = ind_slice["close"]
+            ret_3m = _return_since(close_slice, 63)
+            ret_6m = _return_since(close_slice, 126)
+            if ret_3m is None or ret_6m is None:
+                continue
+
+            rs_3m = ret_3m - sp_ret_3m
+            rs_6m_val = ret_6m - sp_ret_6m
+
+            ticker_data[ticker] = {
+                "row":       row,
+                "price":     float(row["close"]),
+                "rs_score":  rs_3m + rs_6m_val,
+                "rs_6m":     rs_6m_val,
+                "p1m":       _forward_return(ind, bt_date, 30),
+                "p3m":       _forward_return(ind, bt_date, 90),
+            }
+
+        result[bt_date] = {
+            "ticker_data":  ticker_data,
+            "spy_perf_1m":  spy_perf_1m,
+            "spy_perf_3m":  spy_perf_3m,
+        }
+
+    return result
+
+
+def _simulate_from_cache(date_data: dict, bt_dates: list, params: dict) -> list:
+    """
+    Schnelle Simulation über vorberechnete Date-Daten (für den Sweep).
+    Recomputed nur tech_score und RS-Filter (beides billig).
+    """
+    min_score  = params.get("min_score",          _TECH_MIN)
+    rsi_min    = params.get("rsi_min",            _RSI_MIN)
+    rsi_max    = params.get("rsi_max",            _RSI_MAX)
+    vol_factor = params.get("volume_factor",      _VOL_FACTOR)
+    rs_top_pct = params.get("rs_top_percentile",  _RS_TOP_PCT)
+    rs_min_6m  = params.get("rs_min_6m",          _RS_MIN_6M)
+
+    trades = []
+    for bt_date in bt_dates:
+        dd = date_data.get(bt_date)
+        if dd is None:
+            continue
+
+        candidates = []
+        for ticker, td in dd["ticker_data"].items():
+            tech_score = _tech_score_from_row(td["row"], rsi_min, rsi_max, vol_factor)
+            if tech_score is None or tech_score < min_score:
+                continue
+            candidates.append({
+                "ticker":     ticker,
+                "price":      td["price"],
+                "rs_score":   td["rs_score"],
+                "rs_6m":      td["rs_6m"],
+                "tech_score": tech_score,
+                "p1m":        td["p1m"],
+                "p3m":        td["p3m"],
+            })
+
+        if not candidates:
+            continue
+
+        cutoff = float(np.percentile([c["rs_score"] for c in candidates],
+                                      (1 - rs_top_pct) * 100))
+        recommended = [c for c in candidates
+                       if c["rs_score"] >= cutoff and c["rs_6m"] >= rs_min_6m]
+        if not recommended:
+            continue
+
+        spy_perf_1m = dd["spy_perf_1m"]
+        spy_perf_3m = dd["spy_perf_3m"]
+
+        for c in recommended:
+            p1m = c["p1m"]
+            p3m = c["p3m"]
+            trades.append({
+                "date":        str(bt_date),
+                "ticker":      c["ticker"],
+                "entry_price": c["price"],
+                "tech_score":  c["tech_score"],
+                "rs_score":    c["rs_score"],
+                "rs_6m":       c["rs_6m"],
+                "perf_1m":     p1m,
+                "perf_3m":     p3m,
+                "spy_1m":      spy_perf_1m,
+                "spy_3m":      spy_perf_3m,
+                "vs_spy_1m":   round(p1m - spy_perf_1m, 2) if (p1m is not None and spy_perf_1m is not None) else None,
+                "hit_1m":      p1m > 0 if p1m is not None else None,
+                "hit_3m":      p3m > 0 if p3m is not None else None,
+            })
+
+    return trades
+
+
+# ── Overrides ─────────────────────────────────────────────────────────────────
+
+def apply_overrides(params: dict):
+    """
+    Schreibt Parameter-Overrides in backtest/param_overrides.json.
+    config.py liest diese Datei beim nächsten Import und merged die Werte
+    in TECHNICAL / RELATIVE_STRENGTH.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(_OVERRIDES_FILE)), exist_ok=True)
+    with open(_OVERRIDES_FILE, "w", encoding="utf-8") as f:
+        json.dump(params, f, indent=2, ensure_ascii=False)
+    logger.info(f"Parameter-Overrides gespeichert: {params}")
+
+
+def load_overrides() -> dict:
+    """Gibt aktuell aktive Overrides zurück (leeres Dict wenn keine vorhanden)."""
+    if not os.path.exists(_OVERRIDES_FILE):
+        return {}
+    try:
+        with open(_OVERRIDES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def clear_overrides():
+    """Entfernt param_overrides.json — stellt config-Defaults wieder her."""
+    if os.path.exists(_OVERRIDES_FILE):
+        os.remove(_OVERRIDES_FILE)
+        logger.info("Parameter-Overrides entfernt — config.py-Defaults wiederhergestellt")
+
+
+# ── Statistiken ───────────────────────────────────────────────────────────────
 
 def _compute_stats(trades: list[dict], dates_simulated: int, dates_skipped: int,
                    years: int, step_weeks: int) -> dict:
@@ -427,11 +792,8 @@ def _compute_stats(trades: list[dict], dates_simulated: int, dates_skipped: int,
 
     def _max_dd(lst, key):
         vals = [x[key] for x in lst if x.get(key) is not None]
-        if not vals:
-            return None
-        return round(min(vals), 2)
+        return round(min(vals), 2) if vals else None
 
-    # Nach Monat aggregieren
     monthly: dict[str, list] = {}
     for t in t1m:
         ym = t["date"][:7]
@@ -440,55 +802,59 @@ def _compute_stats(trades: list[dict], dates_simulated: int, dates_skipped: int,
     for ym in sorted(monthly.keys()):
         grp = monthly[ym]
         by_month.append({
-            "month": ym,
-            "n": len(grp),
+            "month":       ym,
+            "n":           len(grp),
             "avg_perf_1m": _avg(grp, "perf_1m"),
-            "hit_rate": _hit_rate(grp, "hit_1m"),
-            "avg_vs_spy": _avg(grp, "vs_spy_1m"),
+            "hit_rate":    _hit_rate(grp, "hit_1m"),
+            "avg_vs_spy":  _avg(grp, "vs_spy_1m"),
         })
 
     return {
-        "computed_at": datetime.now().isoformat(),
-        "years": years,
-        "step_weeks": step_weeks,
-        "dates_simulated": dates_simulated,
+        "computed_at":           datetime.now().isoformat(),
+        "years":                 years,
+        "step_weeks":            step_weeks,
+        "dates_simulated":       dates_simulated,
         "dates_skipped_bearish": dates_skipped,
-        "total_trades": len(trades),
-        "measurable_1m": len(t1m),
-        "measurable_3m": len(t3m),
-        "hit_rate_1m": _hit_rate(t1m, "hit_1m"),
-        "avg_return_1m": _avg(t1m, "perf_1m"),
-        "avg_vs_spy_1m": _avg(t1m, "vs_spy_1m"),
-        "sharpe_1m": _sharpe(t1m, "perf_1m"),
-        "max_drawdown_1m": _max_dd(t1m, "perf_1m"),
-        "hit_rate_3m": _hit_rate(t3m, "hit_3m"),
-        "avg_return_3m": _avg(t3m, "perf_3m"),
-        "by_month": by_month,
-        "trades": trades,
+        "total_trades":          len(trades),
+        "measurable_1m":         len(t1m),
+        "measurable_3m":         len(t3m),
+        "hit_rate_1m":           _hit_rate(t1m, "hit_1m"),
+        "avg_return_1m":         _avg(t1m, "perf_1m"),
+        "avg_vs_spy_1m":         _avg(t1m, "vs_spy_1m"),
+        "sharpe_1m":             _sharpe(t1m, "perf_1m"),
+        "max_drawdown_1m":       _max_dd(t1m, "perf_1m"),
+        "hit_rate_3m":           _hit_rate(t3m, "hit_3m"),
+        "avg_return_3m":         _avg(t3m, "perf_3m"),
+        "by_month":              by_month,
+        "trades":                trades,
     }
 
 
 def _empty_result(years: int, step_weeks: int) -> dict:
     return {
         "computed_at": datetime.now().isoformat(),
-        "years": years,
-        "step_weeks": step_weeks,
-        "dates_simulated": 0,
-        "dates_skipped_bearish": 0,
-        "total_trades": 0,
-        "measurable_1m": 0,
-        "measurable_3m": 0,
+        "years": years, "step_weeks": step_weeks,
+        "dates_simulated": 0, "dates_skipped_bearish": 0,
+        "total_trades": 0, "measurable_1m": 0, "measurable_3m": 0,
         "hit_rate_1m": None, "avg_return_1m": None,
-        "avg_vs_spy_1m": None, "sharpe_1m": None,
-        "max_drawdown_1m": None, "hit_rate_3m": None,
-        "avg_return_3m": None,
-        "by_month": [],
-        "trades": [],
+        "avg_vs_spy_1m": None, "sharpe_1m": None, "max_drawdown_1m": None,
+        "hit_rate_3m": None, "avg_return_3m": None,
+        "by_month": [], "trades": [],
     }
 
 
+def _empty_sweep_result(years: int, step_weeks: int, objective: str) -> dict:
+    return {
+        "computed_at": datetime.now().isoformat(),
+        "years": years, "step_weeks": step_weeks, "objective": objective,
+        "train_frac": 0.6, "total_combos_tested": 0, "valid_combos": 0,
+        "current_config": {}, "best": None, "ranked": [],
+    }
+
+
+# ── Persistenz ────────────────────────────────────────────────────────────────
+
 def load_cached_results() -> dict | None:
-    """Gibt gecachte Backtest-Ergebnisse zurück, oder None wenn nicht vorhanden."""
     if not os.path.exists(_RESULTS_FILE):
         return None
     try:
@@ -505,3 +871,22 @@ def _save_results(result: dict):
             json.dump(result, f, indent=2, ensure_ascii=False)
     except Exception as e:
         logger.warning(f"Backtest-Ergebnisse konnten nicht gespeichert werden: {e}")
+
+
+def load_sweep_results() -> dict | None:
+    if not os.path.exists(_SWEEP_RESULTS_FILE):
+        return None
+    try:
+        with open(_SWEEP_RESULTS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_sweep_results(result: dict):
+    os.makedirs(_BACKTEST_CACHE_DIR, exist_ok=True)
+    try:
+        with open(_SWEEP_RESULTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"Sweep-Ergebnisse konnten nicht gespeichert werden: {e}")

@@ -1661,7 +1661,9 @@ def page_backtest():
         "**Nicht backtested:** Gate 4 (Fundamentaldaten — keine historischen yfinance-Snapshots verfügbar)."
     )
 
-    from backtest.runner import run_backtest, load_cached_results
+    from backtest.runner import (run_backtest, load_cached_results, run_param_sweep,
+                                 run_custom_backtest, apply_overrides, clear_overrides,
+                                 load_sweep_results, load_overrides)
 
     cached = load_cached_results()
 
@@ -1669,8 +1671,10 @@ def page_backtest():
     with st.expander("Einstellungen", expanded=cached is None):
         col1, col2 = st.columns(2)
         with col1:
-            years = st.slider("Zeitraum (Jahre)", min_value=1, max_value=3, value=2,
-                              help="Länger = mehr Daten, aber erster Lauf dauert länger (Download).")
+            years = st.slider("Zeitraum (Jahre)", min_value=1, max_value=10, value=2,
+                              help="Mehr Jahre = mehr Simulationsdaten. Aber: yfinance liefert nur die "
+                                   "aktuelle S&P500-Zusammensetzung → stärkerer Survivorship-Bias "
+                                   "je weiter zurück. Erster Lauf mit vielen Jahren dauert länger.")
         with col2:
             step_weeks = st.slider("Scan-Intervall (Wochen)", min_value=1, max_value=4, value=2,
                                    help="Wie oft pro Monat wird ein Scan simuliert.")
@@ -1678,7 +1682,8 @@ def page_backtest():
     run_button = st.button(
         "Backtest starten" if cached is None else "Backtest neu berechnen",
         type="primary",
-        help="Erster Lauf: lädt 3-Jahres-Kursdaten für alle S&P500-Aktien (~5–15 min). Folgeanläufe nutzen Cache.",
+        help="Erster Lauf lädt historische Kursdaten für alle S&P500-Aktien (je nach Jahreszahl 5–30 min). "
+             "Folgeanläufe nutzen Cache.",
     )
 
     if run_button:
@@ -1701,12 +1706,20 @@ def page_backtest():
     if cached is None:
         st.info(
             "Noch kein Backtest berechnet. Klicke auf **Backtest starten** — der erste Lauf lädt "
-            "historische Kursdaten für alle S&P500-Titel (~5–15 Minuten, wird dann gecacht)."
+            "historische Kursdaten für alle S&P500-Titel (~5–30 Minuten je nach Zeitraum, wird dann gecacht)."
         )
         return
 
     # Ergebnisse anzeigen
     _render_backtest_results(cached)
+
+    # Optimierung + Spielwiese
+    st.divider()
+    opt_tab, play_tab = st.tabs(["🤖 Auto-Optimierung", "🎚️ Spielwiese"])
+    with opt_tab:
+        _render_sweep_section(years, step_weeks)
+    with play_tab:
+        _render_playground(years, step_weeks)
 
 
 def _render_backtest_results(res: dict):
@@ -1869,6 +1882,303 @@ def _render_backtest_results(res: dict):
                 df_f = df_f[df_f["Hit 1M"] == "✅"]
             st.caption(f"{len(df_f)} Trades")
             st.dataframe(df_f, use_container_width=True, hide_index=True)
+
+
+def _render_sweep_section(years: int, step_weeks: int):
+    """Auto-Optimierung: Grid-Search über Gate-2/3-Parameter."""
+    from backtest.runner import run_param_sweep, load_sweep_results, apply_overrides, clear_overrides, load_overrides
+
+    st.warning(
+        "**Hinweise zum Sweep:** Optimiert nur Gates 1–3 (Technik + Relative Stärke). "
+        "Gate 4 (Fundamentals) hat keine historischen Daten. "
+        "**Survivorship-Bias:** Das Universum ist die *heutige* S&P500-Zusammensetzung — "
+        "mehr Jahre = mehr Daten, aber stärkerer Bias. "
+        "**Train/Test-Split** zeigt ob gefundene Parameter wirklich generalisieren "
+        "(hoher Overfit-Gap → verdächtig)."
+    )
+
+    active = load_overrides()
+    if active:
+        st.success(
+            "**Aktive Overrides:** " + ", ".join(f"`{k}={v}`" for k, v in active.items())
+        )
+        if st.button("🔄 Zurück auf Standard-Werte (config.py)", key="sweep_clear_overrides"):
+            clear_overrides()
+            st.success("Overrides entfernt — config.py-Defaults wiederhergestellt.")
+            st.rerun()
+
+    with st.expander("Sweep-Einstellungen", expanded=True):
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            objective = st.selectbox(
+                "Zielmetrik",
+                options=["avg_vs_spy_1m", "sharpe_1m", "hit_rate_1m"],
+                format_func={"avg_vs_spy_1m": "Ø vs SPY 1M", "sharpe_1m": "Sharpe (1M)", "hit_rate_1m": "Trefferquote 1M"}.get,
+                key="sweep_objective",
+            )
+        with sc2:
+            grid_mode = st.radio(
+                "Grid-Granularität",
+                ["Grob (486 Kombis)", "Fein (2592 Kombis)"],
+                key="sweep_grid_mode", horizontal=True,
+                help="Fein dauert ~4× länger, testet mehr Zwischenwerte.",
+            )
+        with sc3:
+            min_trades = st.number_input(
+                "Min. Trades (Train)", min_value=10, max_value=100, value=30, step=5,
+                key="sweep_min_trades",
+                help="Kombinationen mit weniger messbaren Trades werden verworfen.",
+            )
+
+    if st.button("🔍 Beste Parameter finden", type="primary", key="sweep_run"):
+        _grid = None
+        if "Fein" in grid_mode:
+            _grid = {
+                "min_score":         [0.50, 0.67, 0.83, 1.0],
+                "rsi_min":           [35, 40, 45, 50],
+                "rsi_max":           [65, 70, 75, 80],
+                "volume_factor":     [0.8, 1.0, 1.2, 1.5],
+                "rs_top_percentile": [0.15, 0.20, 0.25, 0.33],
+                "rs_min_6m":         [0.0, 2.0, 5.0],
+            }
+
+        pb = st.progress(0.0)
+        st_txt = st.empty()
+        _phase_labels = {
+            "download": "Lade Kursdaten",
+            "precompute": "Berechne Indikatoren",
+            "sweep_precompute": "Vorberechnung (einmalig)",
+            "sweep": "Teste Kombinationen",
+        }
+
+        def _cb_sweep(phase, current, total, info=""):
+            pct = current / total if total > 0 else 0
+            pb.progress(min(pct, 1.0))
+            st_txt.caption(f"{_phase_labels.get(phase, phase)}: {info} ({current}/{total})")
+
+        with st.spinner("Sweep läuft — kann mehrere Minuten dauern..."):
+            sweep = run_param_sweep(
+                years=years, step_weeks=step_weeks,
+                grid=_grid, objective=objective,
+                min_trades=int(min_trades),
+                progress_callback=_cb_sweep,
+            )
+        pb.progress(1.0)
+        st_txt.caption("Abgeschlossen.")
+        st.session_state["sweep_results"] = sweep
+        st.rerun()
+
+    sweep = st.session_state.get("sweep_results") or load_sweep_results()
+    if sweep:
+        _render_sweep_results(sweep)
+
+
+def _render_sweep_results(sweep: dict):
+    """Zeigt Sweep-Rangliste, Diff und Übernahme-Buttons."""
+    from backtest.runner import apply_overrides, clear_overrides
+
+    ranked = sweep.get("ranked", [])
+    best = sweep.get("best")
+    current = sweep.get("current_config", {})
+    obj = sweep.get("objective", "avg_vs_spy_1m")
+    obj_label = {"avg_vs_spy_1m": "vs SPY 1M", "sharpe_1m": "Sharpe (1M)", "hit_rate_1m": "Treffer %"}.get(obj, obj)
+
+    st.caption(
+        f"Berechnet: {sweep.get('computed_at','')[:10]} | "
+        f"{sweep.get('years','?')} Jahre | Ziel: {obj_label} | "
+        f"Train {int(sweep.get('train_frac', 0.6)*100)}% / Test {int((1-sweep.get('train_frac',0.6))*100)}% | "
+        f"{sweep.get('valid_combos',0)}/{sweep.get('total_combos_tested',0)} gültige Kombis"
+    )
+
+    if not ranked:
+        st.warning("Keine gültigen Kombinationen gefunden (zu wenig Trades pro Kombi — mehr Jahre oder kleineres Grid).")
+        return
+
+    train_key = f"train_{obj}"
+    test_key = f"test_{obj}"
+
+    rows = []
+    for i, r in enumerate(ranked[:20]):
+        gap = r.get("overfit_gap")
+        overfit_flag = " ⚠️" if (gap is not None and gap > 5) else ""
+        rows.append({
+            "#": i + 1,
+            "min_score": r.get("min_score"),
+            "rsi_min":   r.get("rsi_min"),
+            "rsi_max":   r.get("rsi_max"),
+            "vol_f":     r.get("volume_factor"),
+            "rs_pct":    r.get("rs_top_percentile"),
+            "rs_6m":     r.get("rs_min_6m"),
+            f"Train {obj_label}": r.get(train_key),
+            f"Test {obj_label}":  r.get(test_key),
+            "Gap":        f"{gap:+.1f}{overfit_flag}" if gap is not None else "—",
+            "Trades (Tr)": r.get("train_trades"),
+        })
+
+    st.subheader("Top-20 Kombinationen")
+    st.caption("Gap = Train − Test-Metrik. ⚠️ bei Gap > 5 (mögliches Overfitting).")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    if not best:
+        return
+
+    # Diff Aktuell vs. Empfohlen
+    st.subheader("Aktuell vs. Empfohlen")
+    diff_rows = []
+    for k, v_curr in current.items():
+        v_best = best.get(k, v_curr)
+        diff_rows.append({
+            "Parameter":               k,
+            "Aktuell (config.py)":     v_curr,
+            "Empfohlen (beste Kombi)": v_best,
+            "Geändert":                "✏️" if v_best != v_curr else "",
+        })
+    st.dataframe(pd.DataFrame(diff_rows), use_container_width=True, hide_index=True)
+
+    bc1, bc2 = st.columns(2)
+    with bc1:
+        if st.button("✅ Beste Werte übernehmen", type="primary", key="apply_sweep_best"):
+            apply_overrides(best)
+            st.success("Übernommen! Wirkt ab dem nächsten Scan (Seite neu laden).")
+            st.rerun()
+    with bc2:
+        if st.button("🔄 Zurück auf Standard-Werte", key="reset_sweep"):
+            clear_overrides()
+            st.success("Reset — config.py-Defaults werden wieder verwendet.")
+            st.rerun()
+
+    with st.expander("📋 Als config.py-Eintrag (für dauerhaften git-Commit)"):
+        snippet = (
+            "# In config.py → TECHNICAL:\n"
+            f'    "min_score":    {best.get("min_score")},\n'
+            f'    "rsi_min":      {best.get("rsi_min")},\n'
+            f'    "rsi_max":      {best.get("rsi_max")},\n'
+            f'    "volume_factor":{best.get("volume_factor")},\n\n'
+            "# In config.py → RELATIVE_STRENGTH:\n"
+            f'    "rs_top_percentile": {best.get("rs_top_percentile")},\n'
+            f'    "rs_min_6m":         {best.get("rs_min_6m")},'
+        )
+        st.code(snippet, language="python")
+
+
+def _render_playground(years: int, step_weeks: int):
+    """Interaktive Spielwiese: Parameter selbst wählen, historische Performance simulieren."""
+    from backtest.runner import run_custom_backtest, apply_overrides, clear_overrides, load_overrides
+    import config as _cfg
+
+    st.write(
+        "Stelle die Parameter selbst ein und sieh, wie das System damit historisch abgeschnitten hätte. "
+        "Nutzt den vorhandenen Preis-Cache — nach dem ersten Backtest sehr schnell."
+    )
+
+    active = load_overrides()
+
+    with st.form("playground_form"):
+        st.subheader("Gate 3 — Technische Analyse")
+        pg1, pg2, pg3, pg4 = st.columns(4)
+        with pg1:
+            p_min_score = st.select_slider(
+                "Min. Tech-Score",
+                options=[0.50, 0.67, 0.83, 1.0],
+                value=float(active.get("min_score", _cfg.TECHNICAL.get("min_score", 0.70))),
+                format_func=lambda x: f"{int(x*100)}% ({int(x*6)}/6 Signale)",
+            )
+        with pg2:
+            p_rsi_min = st.number_input(
+                "RSI Min", min_value=20, max_value=60, step=5,
+                value=int(active.get("rsi_min", _cfg.TECHNICAL.get("rsi_min", 45))),
+            )
+        with pg3:
+            p_rsi_max = st.number_input(
+                "RSI Max", min_value=50, max_value=90, step=5,
+                value=int(active.get("rsi_max", _cfg.TECHNICAL.get("rsi_max", 70))),
+            )
+        with pg4:
+            p_vol = st.number_input(
+                "Volumen-Faktor", min_value=0.5, max_value=3.0, step=0.1,
+                value=float(active.get("volume_factor", _cfg.TECHNICAL.get("volume_factor", 1.2))),
+                format="%.1f",
+                help="Volumen muss X-fach über dem 20-Tage-Durchschnitt liegen.",
+            )
+
+        st.subheader("Gate 2 — Relative Stärke")
+        pg5, pg6 = st.columns(2)
+        with pg5:
+            p_rs_pct = st.select_slider(
+                "RS-Perzentil (Top-X% nach rs_score)",
+                options=[0.10, 0.15, 0.20, 0.25, 0.33, 0.40, 0.50],
+                value=float(active.get("rs_top_percentile", _cfg.RELATIVE_STRENGTH.get("rs_top_percentile", 0.33))),
+                format_func=lambda x: f"Top {int(x*100)}%",
+            )
+        with pg6:
+            p_rs_min6 = st.number_input(
+                "6M-Momentum Mindest-Floor (%)",
+                min_value=-10.0, max_value=20.0, step=1.0,
+                value=float(active.get("rs_min_6m", _cfg.RELATIVE_STRENGTH.get("rs_min_6m", 0.0))),
+                format="%.1f",
+                help="6M-Rendite vs. S&P500 muss mindestens diesen Wert haben.",
+            )
+
+        submitted = st.form_submit_button("▶️ Mit diesen Werten testen", type="primary")
+
+    if submitted:
+        _pg_params = {
+            "min_score":         float(p_min_score),
+            "rsi_min":           int(p_rsi_min),
+            "rsi_max":           int(p_rsi_max),
+            "volume_factor":     round(float(p_vol), 2),
+            "rs_top_percentile": float(p_rs_pct),
+            "rs_min_6m":         round(float(p_rs_min6), 2),
+        }
+        pb2 = st.progress(0.0)
+        st2 = st.empty()
+        _pm = {"download": "Lade Kursdaten", "precompute": "Berechne Indikatoren"}
+
+        def _cb_pg(phase, current, total, info=""):
+            pct = current / total if total > 0 else 0
+            pb2.progress(min(pct, 1.0))
+            st2.caption(f"{_pm.get(phase, phase)}: {info} ({current}/{total})")
+
+        with st.spinner("Simuliere..."):
+            _res = run_custom_backtest(years=years, step_weeks=step_weeks,
+                                       params=_pg_params, progress_callback=_cb_pg)
+        pb2.progress(1.0)
+        st2.caption("Abgeschlossen.")
+        st.session_state["playground_result"] = _res
+        st.session_state["playground_params"] = _pg_params
+
+    _pg_res = st.session_state.get("playground_result")
+    if _pg_res:
+        st.subheader("Simulations-Ergebnis")
+        pc1, pc2, pc3, pc4, pc5, pc6 = st.columns(6)
+        _h1m = _pg_res.get("hit_rate_1m")
+        _a1m = _pg_res.get("avg_return_1m")
+        _vs  = _pg_res.get("avg_vs_spy_1m")
+        _sh  = _pg_res.get("sharpe_1m")
+        _h3m = _pg_res.get("hit_rate_3m")
+        pc1.metric("Simulierte Trades", _pg_res.get("total_trades", 0))
+        pc2.metric("Trefferquote 1M",  f"{_h1m:.1f}%" if _h1m is not None else "—",
+                   delta_color="normal" if (_h1m or 0) >= 50 else "inverse")
+        pc3.metric("Ø Return 1M",      f"{_a1m:+.2f}%" if _a1m is not None else "—",
+                   delta_color="normal" if (_a1m or 0) >= 0 else "inverse")
+        pc4.metric("Ø vs SPY 1M",      f"{_vs:+.2f}%" if _vs is not None else "—",
+                   delta_color="normal" if (_vs or 0) >= 0 else "inverse")
+        pc5.metric("Sharpe (1M)",      f"{_sh:.2f}" if _sh is not None else "—")
+        pc6.metric("Trefferquote 3M",  f"{_h3m:.1f}%" if _h3m is not None else "—",
+                   delta_color="normal" if (_h3m or 0) >= 50 else "inverse")
+
+        _pg_p = st.session_state.get("playground_params", {})
+        pp1, pp2 = st.columns(2)
+        with pp1:
+            if st.button("✅ Diese Werte übernehmen", type="primary", key="apply_playground"):
+                apply_overrides(_pg_p)
+                st.success("Übernommen! Wirkt ab dem nächsten Scan.")
+                st.rerun()
+        with pp2:
+            if st.button("🔄 Zurück auf Standard-Werte", key="reset_playground"):
+                clear_overrides()
+                st.success("Reset — config.py-Defaults werden wieder verwendet.")
+                st.rerun()
 
 
 # ── Hauptschleife ─────────────────────────────────────────────────────────────
