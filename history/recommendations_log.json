@@ -4866,5 +4866,352 @@
         "upside_label": "Mittel"
       }
     ]
+  },
+  {
+    "date": "2026-05-28",
+    "market_context": {
+      "vix": 16.35,
+      "sp500_price": 7563.63,
+      "sp500_above_ma50": true,
+      "sp500_above_ma200": true
+    },
+    "recommendations": [
+      {
+        "ticker": "MRK",
+        "sector": "Healthcare",
+        "price": 119.89,
+        "combined_score": 0.656,
+        "confidence_label": "Watch",
+        "tech_score": 0.833,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": true,
+          "Umsatzwachstum > 5%": false,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 60.4,
+          "bb_pct": 89.9,
+          "ma50": 115.96,
+          "ma200": 101.95,
+          "price": 119.89
+        },
+        "metrics": {
+          "pe": 33.8,
+          "revenue_growth": "4.9%",
+          "profit_margin": "13.6%",
+          "debt_to_equity": 106.9,
+          "sector": "Healthcare"
+        },
+        "rs_3m": -8.24,
+        "rs_6m": 8.52,
+        "upside_pct": 4.89,
+        "upside_label": "Gering"
+      },
+      {
+        "ticker": "VZ",
+        "sector": "Communication Services",
+        "price": 48.01,
+        "combined_score": 0.5801,
+        "confidence_label": "Watch",
+        "tech_score": 0.833,
+        "fund_score": 0.6,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": true,
+          "Umsatzwachstum > 5%": false,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": false,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 54.0,
+          "bb_pct": 67.2,
+          "ma50": 47.68,
+          "ma200": 43.21,
+          "price": 48.01
+        },
+        "metrics": {
+          "pe": 11.7,
+          "revenue_growth": "2.9%",
+          "profit_margin": "12.5%",
+          "debt_to_equity": 192.0,
+          "sector": "Communication Services"
+        },
+        "rs_3m": -9.8,
+        "rs_6m": 10.49,
+        "upside_pct": 5.02,
+        "upside_label": "Gering"
+      },
+      {
+        "ticker": "GS",
+        "sector": "Financial Services",
+        "price": 1008.37,
+        "combined_score": 0.7299,
+        "confidence_label": "Moderate Buy",
+        "tech_score": 0.833,
+        "fund_score": 0.6,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": true,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": false,
+          "Free Cashflow positiv": false
+        },
+        "indicators": {
+          "rsi": 68.4,
+          "bb_pct": 94.0,
+          "ma50": 908.38,
+          "ma200": 847.95,
+          "price": 1008.37
+        },
+        "metrics": {
+          "pe": 18.4,
+          "revenue_growth": "14.5%",
+          "profit_margin": "29.4%",
+          "debt_to_equity": 678.6,
+          "sector": "Financial Services"
+        },
+        "rs_3m": -0.36,
+        "rs_6m": 16.03,
+        "upside_pct": 7.03,
+        "upside_label": "Mittel"
+      },
+      {
+        "ticker": "QCOM",
+        "sector": "Technology",
+        "price": 243.29,
+        "combined_score": 0.8532,
+        "confidence_label": "Strong Buy",
+        "tech_score": 0.833,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": true,
+          "Umsatzwachstum > 5%": false,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 68.1,
+          "bb_pct": 88.3,
+          "ma50": 163.26,
+          "ma200": 160.83,
+          "price": 243.29
+        },
+        "metrics": {
+          "pe": 26.2,
+          "revenue_growth": "-3.5%",
+          "profit_margin": "22.3%",
+          "debt_to_equity": 56.0,
+          "sector": "Technology"
+        },
+        "rs_3m": 58.7,
+        "rs_6m": 36.3,
+        "upside_pct": 20.57,
+        "upside_label": "Hoch"
+      },
+      {
+        "ticker": "PLD",
+        "sector": "Real Estate",
+        "price": 145.64,
+        "combined_score": 0.6532,
+        "confidence_label": "Watch",
+        "tech_score": 0.833,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": false,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 59.6,
+          "bb_pct": 78.4,
+          "ma50": 138.92,
+          "ma200": 127.19,
+          "price": 145.64
+        },
+        "metrics": {
+          "pe": 36.5,
+          "revenue_growth": "8.3%",
+          "profit_margin": "39.6%",
+          "debt_to_equity": 60.9,
+          "sector": "Real Estate"
+        },
+        "rs_3m": -6.57,
+        "rs_6m": 4.2,
+        "upside_pct": 9.47,
+        "upside_label": "Mittel"
+      },
+      {
+        "ticker": "AMAT",
+        "sector": "Technology",
+        "price": 449.68,
+        "combined_score": 0.8532,
+        "confidence_label": "Strong Buy",
+        "tech_score": 0.833,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": false,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 61.9,
+          "bb_pct": 81.2,
+          "ma50": 394.8,
+          "ma200": 290.55,
+          "price": 449.68
+        },
+        "metrics": {
+          "pe": 42.3,
+          "revenue_growth": "11.4%",
+          "profit_margin": "29.3%",
+          "debt_to_equity": 30.4,
+          "sector": "Technology"
+        },
+        "rs_3m": 10.36,
+        "rs_6m": 82.42,
+        "upside_pct": 10.25,
+        "upside_label": "Mittel"
+      },
+      {
+        "ticker": "LRCX",
+        "sector": "Technology",
+        "price": 318.0,
+        "combined_score": 0.8532,
+        "confidence_label": "Strong Buy",
+        "tech_score": 0.833,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": false,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 66.0,
+          "bb_pct": 86.1,
+          "ma50": 261.84,
+          "ma200": 191.55,
+          "price": 318.0
+        },
+        "metrics": {
+          "pe": 60.1,
+          "revenue_growth": "23.8%",
+          "profit_margin": "30.9%",
+          "debt_to_equity": 35.3,
+          "sector": "Technology"
+        },
+        "rs_3m": 23.7,
+        "rs_6m": 99.26,
+        "upside_pct": 12.64,
+        "upside_label": "Mittel"
+      },
+      {
+        "ticker": "KLAC",
+        "sector": "Technology",
+        "price": 1927.63,
+        "combined_score": 0.8532,
+        "confidence_label": "Strong Buy",
+        "tech_score": 0.833,
+        "fund_score": 0.8,
+        "tech_signals": {
+          "Kurs über 50-Tage-MA": true,
+          "Kurs über 200-Tage-MA": true,
+          "RSI im optimalen Bereich": true,
+          "MACD bullisch": true,
+          "Nicht überkauft (Bollinger)": true,
+          "Erhöhtes Volumen": false
+        },
+        "fund_signals": {
+          "KGV < 35": false,
+          "Umsatzwachstum > 5%": true,
+          "Gewinnmarge > 8%": true,
+          "Verschuldung < 150": true,
+          "Free Cashflow positiv": true
+        },
+        "indicators": {
+          "rsi": 58.6,
+          "bb_pct": 81.2,
+          "ma50": 1721.62,
+          "ma200": 1340.9,
+          "price": 1927.63
+        },
+        "metrics": {
+          "pe": 54.7,
+          "revenue_growth": "11.5%",
+          "profit_margin": "35.7%",
+          "debt_to_equity": 105.4,
+          "sector": "Technology"
+        },
+        "rs_3m": 17.14,
+        "rs_6m": 57.21,
+        "upside_pct": 9.53,
+        "upside_label": "Mittel"
+      }
+    ]
   }
 ]
