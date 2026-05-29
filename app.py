@@ -62,10 +62,11 @@ def _fmt_ts(ts: str) -> str:
 
 # ── Navigation ────────────────────────────────────────────────────────────────
 
-_PAGES = ["Marktübersicht", "Empfehlungen", "Mein Portfolio", "Performance", "Backtest", "Vollständiger Scan"]
+_PAGES = ["Marktübersicht", "Empfehlungen", "Kauf-Kandidaten", "Mein Portfolio", "Performance", "Backtest", "Vollständiger Scan"]
 _PAGE_ICONS = {
     "Marktübersicht": "📊",
     "Empfehlungen": "🎯",
+    "Kauf-Kandidaten": "🛒",
     "Mein Portfolio": "💼",
     "Performance": "📈",
     "Backtest": "🔬",
@@ -302,6 +303,161 @@ def _render_sp500_chart(hist: pd.Series, ma50: float, ma200: float):
 
 
 # ── Seite 2: Empfehlungen ─────────────────────────────────────────────────────
+
+def page_buy_candidates(result: dict | None):
+    """
+    Kauf-Kandidaten — wendet die evidenzbasierte Entscheidungslogik automatisch an:
+    nur bei grünem Markt, v1∩v2-Schnittmenge (höchste Konfidenz), parabolische
+    RS-Ausreißer markiert, nach Sektor gruppiert, mit Stop-Loss + Gleichgewichtung.
+    """
+    st.header("🛒 Kauf-Kandidaten")
+    st.caption(
+        "Automatische Priorisierung nach den Backtest-Befunden: gestreuter Korb aus der "
+        "Schnittmenge beider Algorithmen, hoher (aber nicht parabolischer) RS, mit Stop-Loss. "
+        "Keine Anlageberatung — der Edge ist statistisch und moderat."
+    )
+
+    if result is None:
+        st.info("Noch keine Analysedaten. Starte die Analyse über die Seitenleiste.")
+        return
+
+    market = result.get("market", {})
+
+    # Schritt 1: Markt-Gate
+    if not market.get("passed"):
+        st.error(
+            f"**Roter Markt — keine Kauf-Kandidaten.**\n\n"
+            f"Grund: {market.get('reason', 'Unbekannt')}\n\n"
+            f"Die Disziplin, bei ungünstigem Marktregime auszusetzen, ist Teil des Edges.",
+            icon="🚫",
+        )
+        return
+    if market.get("warning"):
+        st.warning(f"⚠️ Markt grün, aber vorsichtig: {market.get('reason', '')}", icon="⚠️")
+
+    recommendations = result.get("recommendations", [])
+    v2 = result.get("recommendations_v2")
+
+    if v2 is None:
+        st.info(
+            "Dieser Scan enthält noch keine v2-Daten (älterer Cache). Bitte einmal **Scan starten** "
+            "(Seitenleiste) — danach wird die Schnittmenge v1∩v2 berechnet."
+        )
+        return
+
+    v2_tickers = {r.get("ticker") for r in v2}
+    try:
+        from config import RECOMMENDER_V2 as _rec_v2_cfg
+        parabolic_thr = _rec_v2_cfg.get("parabolic_rs_warn", 150.0)
+    except Exception:
+        parabolic_thr = 150.0
+
+    # Schritt 2: v1∩v2-Schnittmenge (volle v1-Dicts haben exits/rs/sector)
+    candidates = []
+    watch_only = []
+    for r in recommendations:
+        if r.get("ticker") not in v2_tickers:
+            continue
+        exits = r.get("exits", {}) or {}
+        exit_rec = exits.get("recommendation", "Halten")
+        # Was das Tool selbst zum Verkauf flaggt, ist kein Kauf-Kandidat
+        if exit_rec == "Verkaufen erwägen":
+            continue
+        rs = r.get("rs", {}) or {}
+        rs_score = rs.get("rs_score")
+        price = r.get("price")
+        stop = exits.get("stop_loss")
+        stop_pct = round((stop / price - 1) * 100, 1) if (stop and price) else None
+        entry = {
+            "ticker": r.get("ticker"),
+            "name": (r.get("name") or "")[:26],
+            "sector": r.get("sector") or "—",
+            "rs_score": round(rs_score, 1) if rs_score is not None else None,
+            "parabolic": bool(rs_score is not None and rs_score > parabolic_thr),
+            "confidence": r.get("confidence_label") or "—",
+            "price": price,
+            "stop": stop,
+            "stop_pct": stop_pct,
+            "exit_rec": exit_rec,
+        }
+        if exit_rec == "Beobachten":
+            watch_only.append(entry)
+        else:
+            candidates.append(entry)
+
+    n_v1 = len(recommendations)
+    if not candidates and not watch_only:
+        st.info(
+            f"Heute keine Hochkonvikt-Kandidaten. v1 hat {n_v1} Empfehlung(en), aber keine davon "
+            f"liegt auch in der strengeren v2-Schnittmenge mit sauberem Einstieg. "
+            f"Lieber abwarten als erzwingen."
+        )
+        return
+
+    clean = [c for c in candidates if not c["parabolic"]]
+    n_total = len(candidates)
+
+    # ── Kopf-Kennzahlen ────────────────────────────────────────────────────────
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Kandidaten (v1∩v2)", n_total)
+    c2.metric("davon sauber (nicht parabolisch)", len(clean))
+    c3.metric("⚠️ Beobachten", len(watch_only),
+              help="In der Schnittmenge, zeigen aber bereits erste Exit-Signale — nachrangig.")
+
+    # ── Gleichgewichtungs-Rechner ───────────────────────────────────────────────
+    with st.expander("⚖️ Gleichgewichtung berechnen", expanded=False):
+        st.caption(
+            "Der Edge liegt im **Korb**, nicht im Einzeltitel (Einzeltitel schlagen den SPY nur "
+            "~50 %, der Korb ~62 %). Daher gleichgewichtet streuen."
+        )
+        cap = st.number_input("Einzusetzendes Kapital", min_value=0.0, value=10000.0, step=500.0)
+        n_for_alloc = len(clean) if clean else n_total
+        if n_for_alloc > 0 and cap > 0:
+            per = cap / n_for_alloc
+            st.write(f"Bei **{n_for_alloc}** sauberen Kandidaten gleichgewichtet: "
+                     f"**{per:,.0f}** pro Position ({100/n_for_alloc:.1f} % je Titel).")
+
+    st.divider()
+
+    # ── Kandidaten nach Sektor ───────────────────────────────────────────────────
+    st.subheader("Kandidaten nach Sektor")
+    st.caption("Sortiert nach RS-Score. ⚡ = parabolisch/überdehnt (im Backtest crash-anfällig — vorsichtig). "
+               "Stop-Loss vom ersten Tag an setzen.")
+
+    from collections import defaultdict
+    by_sector = defaultdict(list)
+    for c in sorted(candidates, key=lambda x: -(x["rs_score"] or 0)):
+        by_sector[c["sector"]].append(c)
+
+    for sector in sorted(by_sector):
+        rows = []
+        for c in by_sector[sector]:
+            rows.append({
+                "Ticker": ("⚡ " if c["parabolic"] else "") + c["ticker"],
+                "Name": c["name"],
+                "RS-Score": c["rs_score"],
+                "Konfidenz": c["confidence"],
+                "Kurs": f"${c['price']:.2f}" if c["price"] else "—",
+                "Stop-Loss": f"${c['stop']:.2f}" if c["stop"] else "—",
+                "Stop %": f"{c['stop_pct']:+.1f}%" if c["stop_pct"] is not None else "—",
+            })
+        st.markdown(f"**{sector}** ({len(rows)})")
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    if any(c["parabolic"] for c in candidates):
+        st.warning(
+            "⚡ markierte Titel sind sehr stark gelaufen (hoher RS-Score). Im 10-Jahres-Backtest "
+            "lieferten genau solche überdehnten Namen die schlimmsten Einbrüche. Wenn überhaupt, "
+            "dann nur kleiner gewichten und Stop eng setzen."
+        )
+
+    if watch_only:
+        with st.expander(f"⚠️ {len(watch_only)} Kandidaten mit ersten Exit-Signalen (nachrangig)"):
+            st.dataframe(pd.DataFrame([{
+                "Ticker": c["ticker"], "Name": c["name"], "Sektor": c["sector"],
+                "RS-Score": c["rs_score"], "Exit-Status": c["exit_rec"],
+            } for c in watch_only]), use_container_width=True, hide_index=True)
+
 
 def _render_v2_panel(result: dict, recommendations: list):
     """
@@ -2316,6 +2472,8 @@ def main():
         page_market_overview(result)
     elif page == "Empfehlungen":
         page_recommendations(result)
+    elif page == "Kauf-Kandidaten":
+        page_buy_candidates(result)
     elif page == "Mein Portfolio":
         page_portfolio()
     elif page == "Performance":

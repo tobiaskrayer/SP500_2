@@ -99,6 +99,11 @@ ANALYSIS = {
 # A/B-Ergebnis 10J: vs SPY +0.90 % statt +0.52 %, Sharpe 0.20 statt 0.16.
 RECOMMENDER_V2 = {
     "rs_top_percentile": 0.20,   # strenger als v1 (0.33)
+    # Warnschwelle für "parabolische" / überdehnte Titel auf der Kauf-Kandidaten-Seite.
+    # rs_score = rs_3m + rs_6m (Outperformance vs. S&P500 in Prozentpunkten). Sehr hohe
+    # Werte = extrem gelaufen → im 10J-Backtest die schlimmsten Crash-Trades. Nur Hinweis,
+    # kein harter Ausschluss.
+    "parabolic_rs_warn": 150.0,
 }
 
 # --- Parameter-Overrides (aus Backtest-Sweep oder Spielwiese) ---
