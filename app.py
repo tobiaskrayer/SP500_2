@@ -303,6 +303,54 @@ def _render_sp500_chart(hist: pd.Series, ma50: float, ma200: float):
 
 # ── Seite 2: Empfehlungen ─────────────────────────────────────────────────────
 
+def _render_v2_panel(result: dict, recommendations: list):
+    """
+    Zeigt die parallele v2-Empfehlungsliste (datengetrieben optimiert) und die
+    Überschneidung mit v1. v2 ändert v1 nicht — reiner Vergleich.
+    """
+    v2 = result.get("recommendations_v2")
+    if v2 is None:
+        return  # älterer Cache ohne v2 — nichts anzeigen
+
+    v1_tickers = {r.get("ticker") for r in recommendations}
+    v2_tickers = {r.get("ticker") for r in v2}
+    both = v1_tickers & v2_tickers
+    v2_only = v2_tickers - v1_tickers
+    v1_only = v1_tickers - v2_tickers
+
+    with st.expander(f"🔬 Paralleler v2-Algorithmus — {len(v2_tickers)} Empfehlungen "
+                     f"({len(both)} Überschneidung mit v1)", expanded=False):
+        st.caption(
+            "**v2** ist eine datengetriebene Alternative aus dem 10-Jahres-Backtest: strengerer "
+            "RS-Schnitt (Top 20 %), Trend-Pflicht (über MA50 & MA200), nicht überkauft — **ohne** "
+            "die Tech-Score-Schwelle (die historisch keine Vorhersagekraft hatte). Im Backtest schlug "
+            "v2 den SPY um +0,90 %/Monat (v1: +0,52 %). Läuft parallel, ändert die v1-Empfehlungen oben nicht."
+        )
+        if not v2_tickers:
+            st.info("v2 hat aktuell keine Empfehlungen (strengerer Filter als v1).")
+            return
+
+        rows = []
+        for r in sorted(v2, key=lambda x: -(x.get("rs", {}).get("rs_score") or 0)):
+            tk = r.get("ticker")
+            rs = r.get("rs", {})
+            rows.append({
+                "Ticker": tk,
+                "Name": (r.get("name") or "")[:28],
+                "Sektor": r.get("sector") or "—",
+                "RS-Score": round(rs.get("rs_score") or 0, 1),
+                "Tech": f"{(r.get('tech_score') or 0)*100:.0f}%",
+                "Fund": f"{(r.get('fund_score') or 0)*100:.0f}%",
+                "auch in v1": "✅" if tk in both else "—",
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Nur v2", len(v2_only), help="Titel, die v2 empfiehlt, v1 aber nicht.")
+        c2.metric("Beide", len(both))
+        c3.metric("Nur v1", len(v1_only), help="Titel, die v1 empfiehlt, v2 aber nicht (z.B. nicht im Top-20%-RS).")
+
+
 def page_recommendations(result: dict | None):
     st.header("Kaufempfehlungen")
 
@@ -375,6 +423,8 @@ def page_recommendations(result: dict | None):
     )
 
     st.success(f"{len(recommendations_sorted)} Kaufempfehlung{'en' if len(recommendations_sorted) > 1 else ''} gefunden", icon="✅")
+
+    _render_v2_panel(result, recommendations)
     st.divider()
 
     for stock in recommendations_sorted:

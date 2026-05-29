@@ -20,7 +20,7 @@ from analyzer.fundamental import check_fundamental
 from analyzer.confidence import compute_confidence
 from analyzer.exits import compute_exits, inject_external_signals
 from analyzer.upside import compute_upside
-from config import ANALYSIS, RELATIVE_STRENGTH
+from config import ANALYSIS, RELATIVE_STRENGTH, TECHNICAL, RECOMMENDER_V2
 from analyzer.price_cache import load_many as _cache_load_many, save_many as _cache_save_many
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 _SLIM_KEYS = ("ticker", "name", "sector", "recommended",
               "gate_rs", "gate_tech", "gate_fund",
               "tech_score", "fund_score", "combined_score",
-              "confidence_label", "price")
+              "confidence_label", "price",
+              # v2-Parallelalgorithmus (additiv)
+              "recommended_v2", "gate_rs_v2", "trend_ok", "not_overbought")
 
 
 def _slim(r: dict) -> dict:
@@ -139,14 +141,24 @@ def run_full_scan(progress_callback=None) -> dict:
     # Sortierung: Empfehlungen zuerst, dann nach Tech-Score
     results.sort(key=lambda x: (not x["recommended"], -x["tech_score"]))
     recommendations = [r for r in results if r["recommended"]]
+    # v2-Parallelliste: nach RS-Score sortiert (v2s primäres Signal), geslimmt
+    # (kein hist/Charts nötig — dient dem Vergleich, nicht der Detailansicht).
+    recommendations_v2 = [
+        _slim(r) for r in sorted(
+            (r for r in results if r.get("recommended_v2")),
+            key=lambda x: -(x.get("rs", {}).get("rs_score") or 0),
+        )
+    ]
     all_results = [_slim(r) for r in results]
 
-    logger.info(f"Scan abgeschlossen: {len(recommendations)} Empfehlungen aus {len(results)} analysierten Titeln")
+    logger.info(f"Scan abgeschlossen: {len(recommendations)} v1-Empfehlungen, "
+                f"{len(recommendations_v2)} v2-Empfehlungen aus {len(results)} Titeln")
 
     return {
         "timestamp": timestamp,
         "market": market,
         "recommendations": recommendations,
+        "recommendations_v2": recommendations_v2,
         "all_results": all_results,
         "scan_duration_s": round(time.time() - start, 1),
     }
@@ -161,6 +173,7 @@ def _apply_rs_percentile(results: list, market: dict) -> list:
     """
     top_pct = RELATIVE_STRENGTH.get("rs_top_percentile", 0.33)
     min_6m = RELATIVE_STRENGTH.get("rs_min_6m", 0.0)
+    top_pct_v2 = RECOMMENDER_V2.get("rs_top_percentile", 0.20)
 
     # Nur Ergebnisse mit gültigem rs_score
     valid = [r for r in results if r.get("rs", {}).get("rs_score") is not None]
@@ -169,7 +182,9 @@ def _apply_rs_percentile(results: list, market: dict) -> list:
 
     scores = [r["rs"]["rs_score"] for r in valid]
     cutoff = float(np.percentile(scores, (1 - top_pct) * 100))
-    logger.info(f"RS-Perzentil-Cutoff (top {int(top_pct*100)}%): {cutoff:.2f}")
+    cutoff_v2 = float(np.percentile(scores, (1 - top_pct_v2) * 100))
+    logger.info(f"RS-Perzentil-Cutoff v1 (top {int(top_pct*100)}%): {cutoff:.2f} | "
+                f"v2 (top {int(top_pct_v2*100)}%): {cutoff_v2:.2f}")
 
     for r in results:
         rs = r.get("rs", {})
@@ -178,12 +193,23 @@ def _apply_rs_percentile(results: list, market: dict) -> list:
 
         if rs_score is None:
             gate_rs = False
+            gate_rs_v2 = False
         else:
             gate_rs = bool(rs_score >= cutoff and rs_6m >= min_6m)
+            gate_rs_v2 = bool(rs_score >= cutoff_v2 and rs_6m >= min_6m)
 
         r["gate_rs"] = gate_rs
         r["rs"]["passed"] = gate_rs
         r["recommended"] = gate_rs and r.get("gate_tech", False) and r.get("gate_fund", False)
+
+        # v2-Parallelalgorithmus: strengerer RS-Schnitt + Trend-Pflicht + nicht überkauft,
+        # Gate 4 (Fundamentals) bleibt. Tech-Score-Schwelle (gate_tech) bewusst NICHT —
+        # sie hatte im 10J-Backtest keine Vorhersagekraft.
+        r["gate_rs_v2"] = gate_rs_v2
+        r["recommended_v2"] = bool(
+            gate_rs_v2 and r.get("trend_ok", False)
+            and r.get("not_overbought", False) and r.get("gate_fund", False)
+        )
 
     return results
 
@@ -291,6 +317,16 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
 
         recommended = rs["passed"] and tech["passed"] and fund["passed"]
 
+        # v2-Parallelalgorithmus: strukturelle Filter (statt Tech-Score-Schwelle).
+        # Trend = über MA50 UND MA200; nicht überkauft = unter oberem BB-Band UND RSI ≤ Max.
+        _sig = tech.get("signals", {})
+        _rsi_v = tech.get("indicators", {}).get("rsi_value")
+        trend_ok = bool(_sig.get("Kurs über 50-Tage-MA") and _sig.get("Kurs über 200-Tage-MA"))
+        not_overbought = bool(
+            _sig.get("Nicht überkauft (Bollinger)")
+            and _rsi_v is not None and _rsi_v <= TECHNICAL["rsi_max"]
+        )
+
         # Additiv: Konfidenz-Ranking (ändert recommended nicht)
         _mkt = market or {}
         vix = _mkt.get("vix")
@@ -338,6 +374,9 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
             "gate_rs": rs["passed"],
             "gate_tech": tech["passed"],
             "gate_fund": fund["passed"],
+            # v2-Sub-Flags (RS-Schnitt folgt im Post-Pass)
+            "trend_ok": trend_ok,
+            "not_overbought": not_overbought,
             # Scores
             "tech_score": tech["score"],
             "fund_score": fund["score"],

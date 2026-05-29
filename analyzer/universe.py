@@ -24,7 +24,12 @@ def get_sp500_names() -> dict[str, str]:
 def _fetch_sp500_table() -> list[tuple[str, str]]:
     """Lädt Ticker + Firmennamen von Wikipedia. Fallback auf hartcodierte Liste."""
     try:
-        tables = pd.read_html(SP500_WIKI_URL)
+        # User-Agent nötig — Wikipedia blockt Requests ohne ihn mit HTTP 403.
+        # Ohne diesen Header fiele das Tool still auf die 100er-Fallback-Liste zurück.
+        tables = pd.read_html(
+            SP500_WIKI_URL,
+            storage_options={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+        )
         df = tables[0]
         result = []
         for _, row in df.iterrows():

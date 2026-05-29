@@ -90,6 +90,17 @@ ANALYSIS = {
     "max_workers": 3,      # Parallele Downloads (yfinance) — niedrig halten gegen Rate-Limit
 }
 
+# --- Paralleler v2-Empfehlungsalgorithmus ---
+# Datengetrieben aus dem 10-Jahres-Backtest (siehe backtest/compare.py, backtest/diagnostics.py).
+# Befunde: (1) der Tech-Score rankt nicht (6/6 nicht besser als 5/6) → v2 nutzt Trend
+# (über MA50 UND MA200) + "nicht überkauft" als HARTE Pflicht statt einer Score-Schwelle.
+# (2) Der Edge lebt im obersten RS-Bereich → v2 verschärft den RS-Schnitt auf top 20 %.
+# v2 läuft PARALLEL zu v1 (ändert v1-Empfehlungen nicht) und behält Gate 1 + Gate 4 bei.
+# A/B-Ergebnis 10J: vs SPY +0.90 % statt +0.52 %, Sharpe 0.20 statt 0.16.
+RECOMMENDER_V2 = {
+    "rs_top_percentile": 0.20,   # strenger als v1 (0.33)
+}
+
 # --- Parameter-Overrides (aus Backtest-Sweep oder Spielwiese) ---
 # backtest/param_overrides.json überschreibt die obigen Werte wenn vorhanden.
 # Schreiben via backtest.runner.apply_overrides(); Löschen via clear_overrides().

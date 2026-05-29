@@ -32,6 +32,11 @@ portfolio.json
 # Kurs-Cache (Laufzeit-Cache, soll das Repo nicht aufblähen)
 cache/prices/
 
+# Backtest-Cache (Preise, Ergebnisse, angereicherte Date-Daten — regenerierbar, groß)
+cache/backtest/
+# param_overrides.json bleibt versioniert (kleine Konfig), liegt aber in backtest/ —
+# der Backtest-Cache oben betrifft nur cache/backtest/.
+
 # Atomische Schreibvorgänge hinterlassen bei Fehler eine .tmp-Datei — nie committen
 history/*.tmp
 
