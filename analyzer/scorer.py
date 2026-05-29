@@ -301,12 +301,23 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
         exits = compute_exits(hist, entry_price=current_price, vix=vix)
         if exits["signals"]:
             rs_6m = rs.get("rs_6m", 0) or 0
-            market_bearish = not _mkt.get("passed", True) or _mkt.get("warning", False)
+            # "Marktumfeld bearish" NUR bei echtem Gate-1-Versagen — nicht bei warning.
+            # Eine Empfehlung existiert nur, weil Gate 1 den Markt akzeptiert hat; das
+            # Warning-Regime steckt bereits im Konfidenz-Score (Regime-Gewichtung) und in
+            # der strengeren Trailing-Drawdown-Schwelle. Es als zusätzliches per-Titel-
+            # Verkaufssignal zu zählen, würde frische Kaufempfehlungen widersprüchlich auf
+            # "Verkaufen erwägen" setzen. Für Bestandspositionen bleibt warning aktiv
+            # (portfolio/manager.py).
+            market_bearish = not _mkt.get("passed", True)
             _elevated = vix is not None and vix > 20
+            # Das absolute 6M-Signal aus compute_exits durch das relative (vs. S&P500)
+            # ersetzen — konsistent zur Einstiegslogik (Gate 2 verlangt rs_6m ≥ 0).
+            # Entfernen verhindert Doppelzählung beider 6M-Varianten.
+            exits["signals"].pop("6M-Rendite negativ (absolut)", None)
             inject_external_signals(
                 exits,
                 sell_threshold=2 if _elevated else None,
-                **{"6M-Rendite negativ": rs_6m < 0, "Marktumfeld bearish": market_bearish},
+                **{"6M-Rendite negativ (vs. S&P500)": rs_6m < 0, "Marktumfeld bearish": market_bearish},
             )
 
         # Additiv: Erwartetes Upside

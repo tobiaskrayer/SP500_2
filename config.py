@@ -57,8 +57,8 @@ REGIME = {
 EXITS = {
     "atr_stop_multiplier": 2.0,      # Stop-Loss = entry - 2 * ATR(14)
     "atr_target_multiplier": 3.0,    # Take-Profit = entry + 3 * ATR(14) (Risk/Reward 1:1.5)
-    "rsi_overbought": 75,            # RSI-Grenze für Exit-Signal
-    "bb_exit_pct": 0.95,             # Kurs ≥ 95% BB-Band → Exit-Signal
+    "rsi_overbought": 75,            # RSI-Grenze für Exit-Signal (Einstieg endet bei 70 → Puffer)
+    "bb_exit_pct": 0.98,             # Kurs ≥ 98% BB-Band → Exit-Signal (Einstieg endet bei 95% → Puffer gegen Whipsaw)
     "macd_bearish_days": 3,          # MACD muss X Tage durchgehend unter Signallinie liegen
     "trailing_drawdown_pct": 0.15,   # Kurs ≥ 15% unter 50-Tage-Hoch → Exit-Signal (normal)
     "trailing_drawdown_pct_elevated": 0.10,  # Strenger bei erhöhtem VIX-Regime

@@ -128,9 +128,11 @@ def compute_exits(hist: pd.DataFrame, entry_price: float = None,
         close, threshold=dd_pct
     )
 
-    # 6. 6M-Rendite negativ (Kurs tiefer als vor 6 Monaten)
-    # In scorer.py wird dieses Feld ggf. mit RS-Vergleich gegen S&P500 überschrieben
-    signals["6M-Rendite negativ"] = _rs_negative_6m(close)
+    # 6. 6M-Rendite negativ — ABSOLUT (Kurs tiefer als vor ~6 Monaten).
+    # Für Bestandspositionen (portfolio/manager.py) die richtige Sicht.
+    # scorer.py entfernt dieses Signal für frische Empfehlungen und ersetzt es durch
+    # die RELATIVE Variante (vs. S&P500), passend zur Einstiegslogik (Gate 2).
+    signals["6M-Rendite negativ (absolut)"] = _rs_negative_6m(close)
 
     # 7. Marktumfeld bearish/warning — wird extern gesetzt (scorer.py / manager.py)
     signals["Marktumfeld bearish"] = False
