@@ -419,37 +419,54 @@ def page_buy_candidates(result: dict | None):
 
     st.divider()
 
-    # ── Kandidaten nach Sektor ───────────────────────────────────────────────────
-    st.subheader("Kandidaten nach Sektor")
-    st.caption("Sortiert nach RS-Score. ⚡ = parabolisch/überdehnt (im Backtest crash-anfällig — vorsichtig). "
-               "Stop-Loss vom ersten Tag an setzen.")
+    # ── Gesamt-Rangliste (primär) ────────────────────────────────────────────────
+    st.subheader("📊 Rangliste")
+    st.caption(
+        "Rang nach **RS-Score** — das einzige im 10-Jahres-Backtest vorhersagestarke Signal "
+        "(relative Stärke vs. Markt). Saubere Titel zuerst, parabolische (⚡) ans Ende demotet, "
+        "da sie trotz hohem RS crash-anfällig sind. Stop-Loss vom ersten Tag an setzen."
+    )
 
-    from collections import defaultdict
-    by_sector = defaultdict(list)
-    for c in sorted(candidates, key=lambda x: -(x["rs_score"] or 0)):
-        by_sector[c["sector"]].append(c)
+    # Sortierung: erst saubere nach RS absteigend, dann parabolische nach RS absteigend.
+    ranked = sorted(candidates, key=lambda x: (x["parabolic"], -(x["rs_score"] or 0)))
+    rows = []
+    for i, c in enumerate(ranked, 1):
+        rows.append({
+            "Rang": i,
+            "Ticker": ("⚡ " if c["parabolic"] else "") + c["ticker"],
+            "Name": c["name"],
+            "Sektor": c["sector"],
+            "RS-Score": c["rs_score"],
+            "Konfidenz": c["confidence"],
+            "Kurs": f"${c['price']:.2f}" if c["price"] else "—",
+            "Stop-Loss": f"${c['stop']:.2f}" if c["stop"] else "—",
+            "Stop %": f"{c['stop_pct']:+.1f}%" if c["stop_pct"] is not None else "—",
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    for sector in sorted(by_sector):
-        rows = []
-        for c in by_sector[sector]:
-            rows.append({
+    if any(c["parabolic"] for c in candidates):
+        st.warning(
+            "⚡ markierte Titel sind sehr stark gelaufen (hoher RS-Score) und stehen daher trotz "
+            "des hohen RS am Ende der Rangliste. Im 10-Jahres-Backtest lieferten genau solche "
+            "überdehnten Namen die schlimmsten Einbrüche. Wenn überhaupt, nur kleiner gewichten "
+            "und Stop eng setzen."
+        )
+
+    # ── Sektor-Aufschlüsselung (sekundär) ─────────────────────────────────────────
+    with st.expander("🏭 Nach Sektor aufgeschlüsselt"):
+        from collections import defaultdict
+        by_sector = defaultdict(list)
+        for c in ranked:
+            by_sector[c["sector"]].append(c)
+        for sector in sorted(by_sector):
+            st.markdown(f"**{sector}** ({len(by_sector[sector])})")
+            st.dataframe(pd.DataFrame([{
                 "Ticker": ("⚡ " if c["parabolic"] else "") + c["ticker"],
-                "Name": c["name"],
                 "RS-Score": c["rs_score"],
                 "Konfidenz": c["confidence"],
                 "Kurs": f"${c['price']:.2f}" if c["price"] else "—",
                 "Stop-Loss": f"${c['stop']:.2f}" if c["stop"] else "—",
-                "Stop %": f"{c['stop_pct']:+.1f}%" if c["stop_pct"] is not None else "—",
-            })
-        st.markdown(f"**{sector}** ({len(rows)})")
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    if any(c["parabolic"] for c in candidates):
-        st.warning(
-            "⚡ markierte Titel sind sehr stark gelaufen (hoher RS-Score). Im 10-Jahres-Backtest "
-            "lieferten genau solche überdehnten Namen die schlimmsten Einbrüche. Wenn überhaupt, "
-            "dann nur kleiner gewichten und Stop eng setzen."
-        )
+            } for c in by_sector[sector]]), use_container_width=True, hide_index=True)
 
     if watch_only:
         with st.expander(f"⚠️ {len(watch_only)} Kandidaten mit ersten Exit-Signalen (nachrangig)"):
