@@ -52,6 +52,13 @@ def append_scan_result(result: dict):
             _extract_recommendation(r)
             for r in result.get("recommendations", [])
         ],
+        # Paralleler v2-Algorithmus — für den Live-/Out-of-Sample-Vergleich v1 vs v2.
+        # Diese Datensätze sind bereits geslimmt (kein tech/fund-Detail), daher ein
+        # kompakter Extractor. Ältere Log-Einträge haben dieses Feld nicht.
+        "recommendations_v2": [
+            _extract_v2_recommendation(r)
+            for r in result.get("recommendations_v2", [])
+        ],
     }
 
     log = _load_log()
@@ -122,6 +129,26 @@ def _extract_recommendation(r: dict) -> dict:
         "rs_6m": rs.get("rs_6m"),
         "upside_pct": upside.get("expected_upside_pct"),
         "upside_label": upside.get("upside_label"),
+    }
+
+
+def _extract_v2_recommendation(r: dict) -> dict:
+    """
+    Kompakter Datensatz für v2-Parallelempfehlungen. r ist bereits geslimmt
+    (siehe scorer._slim), enthält also kein tech/fund-Detail — für den
+    Performance-Vergleich genügen Ticker, Einstiegskurs und Score-Metadaten.
+    """
+    rs = r.get("rs", {}) or {}
+    return {
+        "ticker": r.get("ticker"),
+        "sector": r.get("sector"),
+        "price": r.get("price"),
+        "combined_score": r.get("combined_score"),
+        "confidence_label": r.get("confidence_label"),
+        "tech_score": r.get("tech_score"),
+        "fund_score": r.get("fund_score"),
+        "rs_3m": rs.get("rs_3m"),
+        "rs_6m": rs.get("rs_6m"),
     }
 
 

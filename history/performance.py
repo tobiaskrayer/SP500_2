@@ -75,12 +75,15 @@ def enrich_with_current_exits(flat: list[dict]) -> list[dict]:
     return flat
 
 
-def enrich_with_performance(log: list[dict]) -> list[dict]:
+def enrich_with_performance(log: list[dict], key: str = "recommendations") -> list[dict]:
     """
     Reichert alle Empfehlungen im Log mit Performance-Daten an.
     Gibt eine flache Liste aller Empfehlungen (über alle Log-Einträge) zurück,
     jede ergänzt um: performance_1w, performance_1m, performance_3m,
                       perf_vs_spy_1m, hit_1m, days_since
+
+    key: "recommendations" (v1, Standard) oder "recommendations_v2" (Parallel-Algorithmus).
+         Der Performance-Cache wird geteilt (Ticker+Datum identisch) — kein Konflikt.
     """
     cache = _load_cache()
 
@@ -88,7 +91,7 @@ def enrich_with_performance(log: list[dict]) -> list[dict]:
     for entry in log:
         rec_date = entry.get("date", "")
         market_ctx = entry.get("market_context", {})
-        for rec in entry.get("recommendations", []):
+        for rec in entry.get(key, []):
             ticker = rec.get("ticker")
             entry_price = rec.get("price")
             if not ticker or not entry_price:

@@ -1310,6 +1310,48 @@ def page_portfolio():
 
 # ── Seite: Performance-Tracking ───────────────────────────────────────────────
 
+def _render_v1_v2_performance(stats_v1: dict, stats_v2: dict):
+    """
+    Live-/Out-of-Sample-Vergleich der realisierten Performance v1 vs v2.
+    Wird nur gezeigt, sobald v2-Empfehlungen im Log mitprotokolliert wurden.
+    Im Gegensatz zum Backtest ist dieser Vergleich frei von Survivorship-Bias.
+    """
+    with st.expander("🔬 v1 vs v2 — realisierte Performance (Out-of-Sample)", expanded=True):
+        st.caption(
+            "Vergleich der tatsächlich protokollierten Empfehlungen beider Algorithmen ab "
+            "Einführung von v2. Anfangs dünn — je länger getrackt, desto aussagekräftiger. "
+            "Dies ist der ehrlichste Test (keine Survivorship-Verzerrung wie im Backtest)."
+        )
+
+        def _row(label, s):
+            n = s.get("total", 0)
+            meas = s.get("measurable", 0)
+            hit = s.get("hit_rate")
+            perf = s.get("avg_perf_1m")
+            vs = s.get("avg_vs_spy_1m")
+            return {
+                "Algorithmus": label,
+                "Empfehlungen": n,
+                "messbar (≥30T)": meas,
+                "Trefferquote 1M": f"{hit:.1f}%" if hit is not None and meas else "—",
+                "Ø Perf 1M": f"{perf:+.2f}%" if perf is not None else "—",
+                "Ø vs SPY 1M": f"{vs:+.2f}%" if vs is not None else "—",
+            }
+
+        st.dataframe(
+            pd.DataFrame([_row("v1 (aktuell)", stats_v1), _row("v2 (optimiert)", stats_v2)]),
+            use_container_width=True, hide_index=True,
+        )
+
+        m1, m2 = stats_v1.get("measurable", 0), stats_v2.get("measurable", 0)
+        if m1 < 10 or m2 < 10:
+            st.info(
+                f"Noch zu wenig messbare Out-of-Sample-Daten (v1: {m1}, v2: {m2} mit ≥30 Tagen) "
+                "für ein belastbares Urteil. Der Vergleich wird mit jedem Scan aussagekräftiger. "
+                "Die historische A/B-Evidenz steht in `backtest/FINDINGS.md`."
+            )
+
+
 def page_performance():
     st.header("Performance historischer Empfehlungen")
     st.caption("Wie gut haben die Empfehlungen der letzten Monate abgeschnitten?")
@@ -1371,6 +1413,11 @@ def page_performance():
         return
 
     stats = ana.summary_stats(enriched)
+
+    # ── v1-vs-v2-Vergleich (Out-of-Sample, sobald v2-Historie existiert) ───────
+    if any(e.get("recommendations_v2") for e in log):
+        enriched_v2 = enrich_with_performance(log, key="recommendations_v2")
+        _render_v1_v2_performance(ana.summary_stats(enriched), ana.summary_stats(enriched_v2))
 
     # ── Aggregierte Kennzahlen ────────────────────────────────────────────────
     col1, col2, col3, col4 = st.columns(4)
