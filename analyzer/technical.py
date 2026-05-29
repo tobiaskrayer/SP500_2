@@ -45,8 +45,11 @@ def check_technical(hist: pd.DataFrame) -> dict:
         sig_above_ma50 = price > ma50
         sig_above_ma200 = (price > ma200) if ma200 is not None else False
 
-        # RSI
-        rsi_val = _rsi_val(close) or 50.0
+        # RSI — None nur noch bei undefiniertem RSI (flach / zu wenig Daten) → neutral.
+        # Reiner Aufwärtstrend liefert jetzt 100 (überkauft), kein irreführendes 50.
+        rsi_val = _rsi_val(close)
+        if rsi_val is None:
+            rsi_val = 50.0
         sig_rsi = TECHNICAL["rsi_min"] <= rsi_val <= TECHNICAL["rsi_max"]
 
         # MACD

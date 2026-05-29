@@ -28,7 +28,11 @@ def rsi_series(close: pd.Series, period: int = 14) -> pd.Series:
     gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
     loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
     rs = gain / loss.replace(0, float("nan"))
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+    # loss == 0 über das Fenster = reiner Aufwärtstrend → RSI = 100 (überkauft),
+    # nicht NaN. Sonst würden parabolische Titel fälschlich als "neutral" gelten.
+    rsi = rsi.mask((loss == 0) & (gain > 0), 100.0)
+    return rsi
 
 
 # ── MACD ──────────────────────────────────────────────────────────────────────

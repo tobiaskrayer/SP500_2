@@ -63,16 +63,16 @@ def _make_serializable(data: dict) -> dict:
     if isinstance(data, list):
         return [_make_serializable(v) for v in data]
     if isinstance(data, pd.Series):
-        return {str(k): (None if pd.isna(v) else float(v)) for k, v in data.items()}
+        return {str(k): (None if (pd.isna(v) or not np.isfinite(v)) else float(v)) for k, v in data.items()}
     if isinstance(data, pd.DataFrame):
         return data.to_dict(orient="list")
     if isinstance(data, (np.integer,)):
         return int(data)
     if isinstance(data, (np.floating,)):
-        return None if np.isnan(data) else float(data)
+        return None if not np.isfinite(data) else float(data)
     if isinstance(data, (np.bool_,)):
         return bool(data)
-    if isinstance(data, float) and np.isnan(data):
+    if isinstance(data, float) and not np.isfinite(data):
         return None
     return data
 

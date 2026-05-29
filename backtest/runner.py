@@ -19,6 +19,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from analyzer.indicators import rsi_series as _rsi_series
+
 logger = logging.getLogger(__name__)
 
 _BACKTEST_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache", "backtest")
@@ -45,9 +47,11 @@ try:
     _RSI_MIN = TECHNICAL.get("rsi_min", 45)
     _RSI_MAX = TECHNICAL.get("rsi_max", 70)
     _VOL_FACTOR = TECHNICAL.get("volume_factor", 1.2)
+    _BB_UPPER_PCT = TECHNICAL.get("bb_upper_pct", 0.95)
 except ImportError:
     _RS_TOP_PCT, _RS_MIN_6M, _TECH_MIN = 0.33, 0.0, 0.70
     _RSI_MIN, _RSI_MAX, _VOL_FACTOR = 45, 70, 1.2
+    _BB_UPPER_PCT = 0.95
 
 
 # ── Preis-Cache (per Ticker) ─────────────────────────────────────────────────
@@ -124,70 +128,54 @@ def _download_prices(tickers: list[str], years: int, progress_callback=None) -> 
 
 def _precompute(hist: pd.DataFrame) -> pd.DataFrame:
     """
-    Berechnet alle Gate-2/3-Indikatoren als komplette Zeitreihe.
-    Enthält sowohl rohe Felder (rsi, vol_ratio) für den Sweep als auch
-    config-abhängige Felder (tech_score) für den Standard-Backtest.
+    Berechnet die Gate-2/3-Indikatoren als komplette Zeitreihe.
+    Nutzt exakt dieselben Definitionen wie der Live-Scan (analyzer/technical.py):
+      - RSI: Wilder-Glättung (analyzer.indicators.rsi_series)
+      - Volumen: 5-Tage- vs. 20-Tage-Schnitt
+      - Bollinger-Schwelle: TECHNICAL["bb_upper_pct"] aus config (nicht hartkodiert)
+    Der tech_score wird pro Parameter-Satz via _tech_score_from_row abgeleitet.
     """
     close = hist["Close"]
     vol = hist.get("Volume", pd.Series(dtype=float))
-    high = hist.get("High", pd.Series(dtype=float))
-    low = hist.get("Low", pd.Series(dtype=float))
 
     ma50 = close.rolling(50).mean()
     ma200 = close.rolling(200).mean()
 
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rsi = 100 - (100 / (1 + gain / loss.replace(0, np.nan)))
+    # RSI: Wilder-Glättung — identisch zum Live-Scan
+    rsi = _rsi_series(close)
 
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    macd_line = ema12 - ema26
+    # MACD: Histogramm > 0  ⟺  macd_line > signal_line
+    macd_line = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    macd_bull = (macd_line > signal_line)
+    macd_bull = macd_line > signal_line
 
+    # Bollinger: Schwelle aus config statt hartkodiert
     bb_ma = close.rolling(20).mean()
     bb_std = close.rolling(20).std()
     bb_lower = bb_ma - 2 * bb_std
     bb_upper = bb_ma + 2 * bb_std
     bb_range = (bb_upper - bb_lower).replace(0, np.nan)
     bb_pct = (close - bb_lower) / bb_range
-    bb_ok = bb_pct < 0.95
+    bb_ok = bb_pct < _BB_UPPER_PCT
 
-    vol_avg = vol.rolling(20).mean() if len(vol) else pd.Series(dtype=float)
-    if len(vol_avg):
-        vol_ratio = (vol / vol_avg.replace(0, np.nan)).fillna(0).replace(np.inf, 0)
+    # Volumen: 5-Tage-Schnitt vs. 20-Tage-Schnitt — wie Live-Scan
+    if len(vol):
+        vol_recent = vol.rolling(5).mean()
+        vol_avg = vol.rolling(20).mean()
+        vol_ratio = (vol_recent / vol_avg.replace(0, np.nan)).replace([np.inf, -np.inf], 0).fillna(0)
     else:
         vol_ratio = pd.Series(0.0, index=close.index)
-
-    above_ma50 = close > ma50
-    above_ma200 = close > ma200
-    rsi_ok = (rsi >= _RSI_MIN) & (rsi <= _RSI_MAX)
-    vol_elevated = vol_ratio > _VOL_FACTOR
-
-    tech_score = (
-        above_ma50.astype(float)
-        + above_ma200.astype(float)
-        + rsi_ok.astype(float)
-        + macd_bull.astype(float)
-        + bb_ok.astype(float)
-        + vol_elevated.astype(float)
-    ) / 6.0
 
     return pd.DataFrame({
         "close": close,
         "ma50": ma50,
         "ma200": ma200,
-        "above_ma50": above_ma50,
-        "above_ma200": above_ma200,
+        "above_ma50": close > ma50,
+        "above_ma200": close > ma200,
         "rsi": rsi,
-        "rsi_ok": rsi_ok,
         "macd_bull": macd_bull,
         "bb_ok": bb_ok,
         "vol_ratio": vol_ratio,
-        "vol_elevated": vol_elevated,
-        "tech_score": tech_score,
     }, index=hist.index)
 
 
@@ -198,7 +186,8 @@ def _tech_score_from_row(row, rsi_min: float, rsi_max: float, vol_factor: float)
         if pd.isna(rsi):
             return None
         rsi_ok = rsi_min <= rsi <= rsi_max
-        vol_ok = float(row.get("vol_ratio", 0) or 0) > vol_factor
+        # >= wie der Live-Scan (vol_recent >= vol_avg * factor)
+        vol_ok = float(row.get("vol_ratio", 0) or 0) >= vol_factor
         return (
             float(bool(row.get("above_ma50", False)))
             + float(bool(row.get("above_ma200", False)))
