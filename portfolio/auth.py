@@ -14,31 +14,16 @@ def current_user_id() -> str | None:
     return None
 
 
-def _try_auto_login():
-    """
-    Versucht automatischen Login über AUTH_EMAIL/AUTH_PASSWORD in st.secrets.
-    Wird nach jedem Streamlit-Cloud-Redeploy aufgerufen (täglich durch Actions-Push).
-    """
-    try:
-        email = st.secrets.get("AUTH_EMAIL", "")
-        password = st.secrets.get("AUTH_PASSWORD", "")
-        if not email or not password:
-            return
-        sb = get_supabase()
-        res = sb.auth.sign_in_with_password({"email": email, "password": password})
-        if res.user:
-            st.session_state.sb_user = res.user
-    except Exception:
-        pass
-
-
 def render_auth_gate() -> bool:
     """
     Zeigt Login/Signup-Formular wenn kein Nutzer eingeloggt ist.
     Gibt True zurück wenn Nutzer eingeloggt, False wenn nicht (App soll anhalten).
     """
     if "sb_user" not in st.session_state:
-        # 1. Session aus laufendem Supabase-Client wiederherstellen (normaler Rerun)
+        # Session aus dem Supabase-Client dieser Session wiederherstellen (normaler Rerun).
+        # Kein Auto-Login über Secrets mehr: der loggte jeden anonymen Besucher als das
+        # Secrets-Konto ein — bei mehreren Nutzern ein Datenleck. Nach einem Redeploy
+        # ist daher ein erneuter Login nötig.
         try:
             sb = get_supabase()
             session = sb.auth.get_session()
@@ -46,10 +31,6 @@ def render_auth_gate() -> bool:
                 st.session_state.sb_user = session.user
         except Exception:
             pass
-
-    # 2. Nach Redeploy (Cache geleert): Auto-Login über Secrets
-    if "sb_user" not in st.session_state:
-        _try_auto_login()
 
     if st.session_state.get("sb_user"):
         return True
@@ -125,5 +106,6 @@ def render_logout_button():
             get_supabase().auth.sign_out()
         except Exception:
             pass
-        del st.session_state["sb_user"]
+        st.session_state.pop("sb_user", None)
+        st.session_state.pop("sb_client", None)  # Client mit Auth-Token verwerfen
         st.rerun()

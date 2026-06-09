@@ -1,15 +1,21 @@
 """
-Supabase-Client-Singleton.
+Supabase-Client pro Streamlit-Session.
 Liest URL und Anon-Key aus st.secrets (Streamlit Cloud) oder Umgebungsvariablen.
+
+Bewusst KEIN @st.cache_resource: das würde einen Client (inkl. Auth-Token!)
+über alle Browser-Sessions teilen — Login von Nutzer B würde den Token von
+Nutzer A überschreiben und sb.auth.get_session() gäbe fremde Sessions heraus.
 """
 
 import os
 import streamlit as st
 
 
-@st.cache_resource
 def get_supabase():
-    """Gibt einen gecachten Supabase-Client zurück."""
+    """Gibt den Supabase-Client der aktuellen Session zurück (lazy erstellt)."""
+    if "sb_client" in st.session_state:
+        return st.session_state.sb_client
+
     try:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_ANON_KEY"]
@@ -24,4 +30,5 @@ def get_supabase():
         )
 
     from supabase import create_client
-    return create_client(url, key)
+    st.session_state.sb_client = create_client(url, key)
+    return st.session_state.sb_client
