@@ -231,15 +231,18 @@ def _forward_return(indicator_df: pd.DataFrame, from_date: date, days: int) -> f
     """Kursrendite `days` Kalendertage nach from_date."""
     try:
         target = from_date + timedelta(days=days)
-        future = indicator_df[indicator_df.index > str(from_date)]
-        future_until = future[future.index <= str(target + timedelta(days=5))]
-        if len(future_until) < 1:
+        # Exit = erster Handelstag >= target (max. 5 Tage Toleranz für Wochenende/Feiertage).
+        # Vorher wurde der LETZTE Kurs bis target+5 genommen — die Haltedauer war damit
+        # systematisch bis zu 5 Tage zu lang und bei Datenende (Delisting) beliebig kurz.
+        pos = len(_slice_to_date(indicator_df, target - timedelta(days=1)))
+        within_tolerance = len(_slice_to_date(indicator_df, target + timedelta(days=5)))
+        if pos >= within_tolerance:
             return None
         entry_row = _slice_to_date(indicator_df, from_date)
         if len(entry_row) < 1:
             return None
         entry_price = float(entry_row["close"].iloc[-1])
-        exit_price = float(future_until["close"].iloc[-1])
+        exit_price = float(indicator_df["close"].iloc[pos])
         return round((exit_price / entry_price - 1) * 100, 2)
     except Exception:
         return None

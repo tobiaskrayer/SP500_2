@@ -135,8 +135,12 @@ def _compute_performance(ticker: str, rec_date_str: str, entry_price: float) -> 
             target = rec_date + timedelta(days=days)
             if target > today:
                 return None
+            # Erster Handelstag >= target. Kein Clamping ans Datenende: sonst würde
+            # bei kurzer Historie (Delisting) eine kürzere Periode als volle
+            # 1W/1M/3M-Performance gemeldet.
             idx = hist.index.searchsorted(str(target))
-            idx = min(idx, len(hist) - 1)
+            if idx >= len(hist):
+                return None
             price = float(hist["Close"].iloc[idx])
             return round((price / entry_price - 1) * 100, 2)
 
@@ -148,7 +152,8 @@ def _compute_performance(ticker: str, rec_date_str: str, entry_price: float) -> 
                 return None
             spy_entry = float(spy_hist["Close"].iloc[0])
             idx = spy_hist.index.searchsorted(str(target))
-            idx = min(idx, len(spy_hist) - 1)
+            if idx >= len(spy_hist):
+                return None
             spy_later = float(spy_hist["Close"].iloc[idx])
             return round((spy_later / spy_entry - 1) * 100, 2)
 
@@ -235,12 +240,16 @@ def _load_hist_for_perf(ticker: str, start_str: str, end_date) -> object:
     """
     Lädt Kursdaten für die Performance-Berechnung.
     Nutzt gecachte 1J-Daten (slice) wenn verfügbar, sonst direkter yfinance-Call.
+    Der Index wird tz-naiv normalisiert: yf.Ticker().history liefert tz-aware,
+    der Preis-Cache ggf. tz-naiv — searchsorted(str) auf tz-aware Indizes ist
+    je nach pandas-Version fehleranfällig.
     """
     from datetime import timedelta
     if _CACHE_AVAILABLE:
         cached = _price_cache_load(ticker)
         if cached is not None:
             try:
+                cached = _tz_naive(cached)
                 sliced = cached[cached.index >= start_str]
                 if len(sliced) >= 2:
                     return sliced
@@ -250,4 +259,15 @@ def _load_hist_for_perf(ticker: str, start_str: str, end_date) -> object:
     hist = yf.Ticker(ticker).history(start=start_str, end=str(end_date + timedelta(days=1)))
     if _CACHE_AVAILABLE and hist is not None and len(hist) >= 60:
         _price_cache_save(ticker, hist)
-    return hist
+    return _tz_naive(hist) if hist is not None else hist
+
+
+def _tz_naive(df):
+    """Entfernt die Zeitzone vom Index (Kopie nur bei Bedarf)."""
+    try:
+        if getattr(df.index, "tz", None) is not None:
+            df = df.copy()
+            df.index = df.index.tz_localize(None)
+    except Exception:
+        pass
+    return df

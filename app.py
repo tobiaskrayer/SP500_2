@@ -1371,7 +1371,10 @@ def page_portfolio():
         else:
             with st.spinner("Lade historische Kursdaten für Performance-Chart..."):
                 from portfolio.history import get_portfolio_history
-                hist_data = get_portfolio_history(positions, user_id=current_user_id())
+                # realized mitgeben: verkaufte Stücke zählen in der Vergangenheit mit,
+                # sonst wäre die History nach jedem Verkauf rückwirkend falsch.
+                hist_data = get_portfolio_history(positions, realized=realized,
+                                                  user_id=current_user_id())
 
             if not hist_data:
                 st.info("Nicht genug Kursdaten (mindestens 3 Tage Haltedauer nötig).")

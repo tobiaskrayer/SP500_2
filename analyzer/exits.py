@@ -204,5 +204,6 @@ def _rs_negative_6m(close: pd.Series) -> bool:
     """Kurs liegt tiefer als vor ~6 Monaten (126 Handelstage)."""
     if len(close) < 63:
         return False
-    lookback = min(126, len(close) - 1)
+    # n Handelstage zurück = iloc[-(n+1)] — konsistent zu relative_strength.perf()
+    lookback = min(127, len(close))
     return float(close.iloc[-1]) < float(close.iloc[-lookback])

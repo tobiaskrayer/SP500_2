@@ -11,7 +11,7 @@ import yfinance as yf
 import pandas as pd
 
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache")
-_CACHE_VERSION = "v2"  # erhöhen wenn Berechnungslogik sich ändert → Cache-Invalidierung
+_CACHE_VERSION = "v3"  # erhöhen wenn Berechnungslogik sich ändert → Cache-Invalidierung
 
 
 def _cache_file(user_id: str | None = None) -> str:
@@ -19,11 +19,15 @@ def _cache_file(user_id: str | None = None) -> str:
     return os.path.join(_CACHE_DIR, f"portfolio_history{suffix}.json")
 
 
-def get_portfolio_history(positions: list[dict], user_id: str | None = None) -> dict | None:
+def get_portfolio_history(positions: list[dict], realized: list[dict] | None = None,
+                          user_id: str | None = None) -> dict | None:
     """
     Berechnet die tägliche Portfolio-Wertentwicklung ab dem ersten Kauf.
 
-    positions: Output von evaluate_positions() (offene + für History-Zwecke auch geschlossene Lots)
+    positions: Output von evaluate_positions() (offene Lots)
+    realized:  Output von load_realized() — nötig, damit verkaufte Stücke in der
+               Vergangenheit korrekt enthalten sind. Ohne sie würden vergangene
+               Portfolio-Werte mit den HEUTIGEN (reduzierten) Stückzahlen berechnet.
 
     Returns:
         {
@@ -38,17 +42,13 @@ def get_portfolio_history(positions: list[dict], user_id: str | None = None) -> 
         }
         Oder None wenn nicht genug Daten.
     """
-    if not positions:
+    # Bestände als Intervalle: (buy_date, sell_date|None, shares, price_eur) je Ticker.
+    # Offene Lots laufen bis heute, realisierte Trades von buy_date bis sell_date.
+    holdings = _build_holdings(positions, realized or [])
+    if not holdings:
         return None
 
-    # Frühestes Kaufdatum über alle Positionen bestimmen
-    all_dates = []
-    for pos in positions:
-        for lot in pos.get("lots", []):
-            try:
-                all_dates.append(datetime.strptime(lot["date"], "%Y-%m-%d").date())
-            except Exception:
-                pass
+    all_dates = [iv[0] for ivs in holdings.values() for iv in ivs]
     if not all_dates:
         return None
 
@@ -59,10 +59,11 @@ def get_portfolio_history(positions: list[dict], user_id: str | None = None) -> 
         return None
 
     start_str = start.isoformat()
-    tickers_needed = [pos["ticker"] for pos in positions] + ["EURUSD=X", "SPY"]
+    tickers_needed = sorted(holdings) + ["EURUSD=X", "SPY"]
 
-    # Cache prüfen
-    cache_key = f"{_CACHE_VERSION}_{start_str}_{','.join(sorted(p['ticker'] for p in positions))}"
+    # Cache prüfen — Fingerprint enthält auch die realisierten Trades
+    n_lots = sum(len(ivs) for ivs in holdings.values())
+    cache_key = f"{_CACHE_VERSION}_{start_str}_{','.join(sorted(holdings))}_{n_lots}_{len(realized or [])}"
     cached = _load_cache(user_id)
     if cached and cached.get("cache_key") == cache_key and cached.get("end_date") == today.isoformat():
         return cached.get("result")
@@ -90,8 +91,13 @@ def get_portfolio_history(positions: list[dict], user_id: str | None = None) -> 
         if closes.empty:
             return None
 
-        # EUR/USD-Kurs
+        # EUR/USD-Kurs — ohne FX-Daten keine History (ein fixer Fallback-Kurs
+        # würde das Portfolio um bis zu ~10 % falsch bewerten).
         eurusd_series = closes.get("EURUSD=X") if "EURUSD=X" in closes.columns else None
+        if eurusd_series is None:
+            return None
+        # FX-Kalender weicht vom Aktienkalender ab → Lücken am Serienanfang füllen
+        eurusd_series = eurusd_series.ffill().bfill()
         spy_series = closes.get("SPY") if "SPY" in closes.columns else None
 
         # Tägliche Portfolio-Werte berechnen
@@ -100,18 +106,19 @@ def get_portfolio_history(positions: list[dict], user_id: str | None = None) -> 
 
         for dt, row in closes.iterrows():
             dt_date = dt.date() if hasattr(dt, "date") else dt
-            eurusd = float(eurusd_series.get(dt, 1.1)) if eurusd_series is not None else 1.1
+            eurusd = float(eurusd_series.get(dt, float("nan")))
+            if pd.isna(eurusd) or eurusd <= 0:
+                continue
 
             day_value_eur = 0.0
-            for pos in positions:
-                ticker = pos["ticker"]
+            for ticker, intervals in holdings.items():
                 if ticker not in closes.columns:
                     continue
                 price_usd = row.get(ticker)
                 if price_usd is None or pd.isna(price_usd):
                     continue
-                # Stücke, die an diesem Tag bereits gehalten wurden
-                shares_held = _shares_held_on(pos, dt_date)
+                # Stücke, die an diesem Tag gehalten wurden (inkl. später verkaufter)
+                shares_held = _shares_held_on(intervals, dt_date)
                 if shares_held > 0:
                     day_value_eur += float(price_usd) / eurusd * shares_held
 
@@ -122,14 +129,16 @@ def get_portfolio_history(positions: list[dict], user_id: str | None = None) -> 
         if len(daily_values) < 2:
             return None
 
-        # Normalisierung: Portfolio-Wert / investiertes Kapital bis zu diesem Tag × 100
-        # Vermeidet den Fehler, dass neue Käufe als "Gewinn" gewertet werden
+        # Normalisierung: Portfolio-Wert / Einstandswert der an diesem Tag gehaltenen
+        # Stücke × 100. Vermeidet, dass neue Käufe als "Gewinn" gewertet werden, und
+        # zählt verkauftes Kapital nach dem Verkauf nicht mehr mit.
         def _invested_on(d_str: str) -> float:
+            d = datetime.strptime(d_str, "%Y-%m-%d").date()
             total = 0.0
-            for pos in positions:
-                for lot in pos.get("lots", []):
-                    if lot["date"] <= d_str:
-                        total += float(lot["shares"]) * float(lot["price_eur"])
+            for intervals in holdings.values():
+                for buy_d, sell_d, shares, price_eur in intervals:
+                    if buy_d <= d and (sell_d is None or d < sell_d):
+                        total += shares * price_eur
             return total
 
         total_invested = _invested_on(dates_out[-1])
@@ -182,16 +191,38 @@ def get_portfolio_history(positions: list[dict], user_id: str | None = None) -> 
         return None
 
 
-def _shares_held_on(pos: dict, on_date: date) -> float:
-    """Gibt die Anzahl Stücke zurück, die an `on_date` bereits in diesem Lot lagen."""
-    total = 0.0
-    for lot in pos.get("lots", []):
+def _build_holdings(positions: list[dict], realized: list[dict]) -> dict[str, list[tuple]]:
+    """
+    Baut je Ticker eine Liste von Halte-Intervallen:
+        (buy_date, sell_date | None, shares, price_eur)
+    Offene Lots haben sell_date=None, realisierte Trades enden am Verkaufstag.
+    """
+    holdings: dict[str, list[tuple]] = {}
+    for pos in positions:
+        for lot in pos.get("lots", []):
+            try:
+                buy_d = datetime.strptime(lot["date"], "%Y-%m-%d").date()
+                entry = (buy_d, None, float(lot["shares"]), float(lot["price_eur"]))
+            except Exception:
+                continue
+            holdings.setdefault(pos["ticker"], []).append(entry)
+    for trade in realized:
         try:
-            lot_date = datetime.strptime(lot["date"], "%Y-%m-%d").date()
-            if lot_date <= on_date:
-                total += float(lot["shares"])
+            buy_d = datetime.strptime(trade["buy_date"], "%Y-%m-%d").date()
+            sell_d = datetime.strptime(trade["sell_date"], "%Y-%m-%d").date()
+            entry = (buy_d, sell_d, float(trade["shares"]), float(trade["buy_price_eur"]))
         except Exception:
-            pass
+            continue
+        holdings.setdefault(trade["ticker"], []).append(entry)
+    return holdings
+
+
+def _shares_held_on(intervals: list[tuple], on_date: date) -> float:
+    """Anzahl Stücke, die an `on_date` gehalten wurden (verkaufte zählen bis exkl. Verkaufstag)."""
+    total = 0.0
+    for buy_d, sell_d, shares, _price in intervals:
+        if buy_d <= on_date and (sell_d is None or on_date < sell_d):
+            total += shares
     return total
 
 

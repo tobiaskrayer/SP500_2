@@ -464,7 +464,8 @@ def evaluate_positions() -> list[dict]:
 
         pnl_abs_eur = None
         pnl_pct = None
-        if avg_entry_eur is not None and current_price_eur is not None:
+        # avg_entry_eur == 0 möglich (z.B. Migration mit fehlendem Kaufkurs) → kein P&L statt Crash
+        if avg_entry_eur and current_price_eur is not None:
             pnl_abs_eur = round((current_price_eur - avg_entry_eur) * total_shares, 2)
             pnl_pct = round((current_price_eur / avg_entry_eur - 1) * 100, 2)
 
