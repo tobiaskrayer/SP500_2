@@ -383,6 +383,32 @@ def load_realized() -> list[dict]:
 
 # ── Live-Daten ────────────────────────────────────────────────────────────────
 
+def _batch_history(tickers: list[str], period: str = "3mo") -> dict:
+    """
+    Ein yf.download-Call für alle Portfolio-Ticker statt N Einzelcalls
+    (schneller, weniger Rate-Limit-Risiko). Ticker ohne Daten fehlen im Dict.
+    """
+    if not tickers:
+        return {}
+    try:
+        raw = yf.download(tickers, period=period, auto_adjust=True,
+                          progress=False, group_by="ticker", threads=False)
+        if raw is None or raw.empty:
+            return {}
+        out = {}
+        for t in tickers:
+            try:
+                df = raw[t].copy() if len(tickers) > 1 else raw.copy()
+                df = df.dropna(how="all")
+                if len(df) >= 15:
+                    out[t] = df
+            except Exception:
+                pass
+        return out
+    except Exception:
+        return {}
+
+
 def get_eurusd_rate() -> float | None:
     """Aktueller EUR/USD-Kurs. None bei Fehler."""
     try:
@@ -418,6 +444,9 @@ def evaluate_positions() -> list[dict]:
         t = lot["ticker"]
         grouped.setdefault(t, []).append(lot)
 
+    # Kursdaten gebündelt laden; Einzelcall bleibt als Fallback je Ticker
+    hist_batch = _batch_history(list(grouped))
+
     results = []
     for ticker, ticker_lots in grouped.items():
         total_shares = _total_shares_from_lots(ticker_lots)
@@ -433,8 +462,9 @@ def evaluate_positions() -> list[dict]:
                  "signals": {}, "signal_count": 0, "recommendation": "Keine Daten"}
 
         try:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="3mo")
+            hist = hist_batch.get(ticker)
+            if hist is None or len(hist) < 15:
+                hist = yf.Ticker(ticker).history(period="3mo")
             if hist is not None and len(hist) >= 15:
                 current_price_usd = float(hist["Close"].iloc[-1])
                 if eurusd:
@@ -451,7 +481,7 @@ def evaluate_positions() -> list[dict]:
                             exits[key] = round(exits[key] / eurusd, 2)
             if not sector:
                 try:
-                    sector = stock.info.get("sector")
+                    sector = yf.Ticker(ticker).info.get("sector")
                     if sector:
                         # Sektor im ersten Lot cachen
                         get_supabase().table("lots").update({"sector": sector}).eq(

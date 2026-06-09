@@ -37,6 +37,11 @@ def check_technical(hist: pd.DataFrame) -> dict:
         close = hist["Close"].dropna()
         volume = hist["Volume"].dropna()
 
+        # Nach dropna() erneut prüfen — sonst werden NaN-Vergleiche still False
+        # und der Tech-Score sinkt wegen Datenlücken statt wegen echter Signale.
+        if len(close) < 50:
+            return result
+
         # Gleitende Durchschnitte
         ma50 = close.rolling(50).mean().iloc[-1]
         ma200 = close.rolling(200).mean().iloc[-1] if len(close) >= 200 else None
@@ -61,10 +66,14 @@ def check_technical(hist: pd.DataFrame) -> dict:
         bb_pct = (price - bb_lower.iloc[-1]) / (bb_upper.iloc[-1] - bb_lower.iloc[-1] + 1e-9)
         sig_bb = bb_pct < TECHNICAL["bb_upper_pct"]
 
-        # Volumen
-        vol_avg = volume.rolling(TECHNICAL["volume_lookback"]).mean().iloc[-1]
-        vol_recent = volume.iloc[-5:].mean()
-        sig_volume = vol_recent >= vol_avg * TECHNICAL["volume_factor"]
+        # Volumen — bei fehlenden Volumendaten explizit False (kein stiller NaN-Vergleich)
+        vol_avg = (volume.rolling(TECHNICAL["volume_lookback"]).mean().iloc[-1]
+                   if len(volume) >= TECHNICAL["volume_lookback"] else float("nan"))
+        vol_recent = volume.iloc[-5:].mean() if len(volume) >= 5 else float("nan")
+        if pd.isna(vol_avg) or pd.isna(vol_recent):
+            sig_volume = False
+        else:
+            sig_volume = vol_recent >= vol_avg * TECHNICAL["volume_factor"]
 
         signals = {
             "Kurs über 50-Tage-MA": sig_above_ma50,

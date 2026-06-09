@@ -72,6 +72,10 @@ def _make_serializable(data: dict) -> dict:
         return None if not np.isfinite(data) else float(data)
     if isinstance(data, (np.bool_,)):
         return bool(data)
+    if isinstance(data, np.ndarray):
+        return [_make_serializable(v) for v in data.tolist()]
+    if isinstance(data, (pd.Timestamp, np.datetime64)):
+        return str(data)
     if isinstance(data, float) and not np.isfinite(data):
         return None
     return data

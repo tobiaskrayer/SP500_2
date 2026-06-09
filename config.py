@@ -116,11 +116,29 @@ if _os.path.exists(_overrides_path):
     try:
         with open(_overrides_path, "r", encoding="utf-8") as _f:
             _ov = _json.load(_f)
+
+        # Nur numerische Werte in plausibler Range übernehmen — eine kaputte
+        # param_overrides.json darf den Scan nicht mit Typ-/Logikfehlern crashen.
+        _ranges = {
+            "min_score": (0.0, 1.0),
+            "rsi_min": (0.0, 100.0),
+            "rsi_max": (0.0, 100.0),
+            "volume_factor": (0.0, 10.0),
+            "rs_top_percentile": (0.01, 1.0),
+            "rs_min_6m": (-100.0, 100.0),
+        }
+
+        def _valid(_k, _v):
+            _lo, _hi = _ranges[_k]
+            return isinstance(_v, (int, float)) and not isinstance(_v, bool) and _lo <= _v <= _hi
+
         for _k in ("min_score", "rsi_min", "rsi_max", "volume_factor"):
-            if _k in _ov:
+            if _k in _ov and _valid(_k, _ov[_k]):
                 TECHNICAL[_k] = _ov[_k]
         for _k in ("rs_top_percentile", "rs_min_6m"):
-            if _k in _ov:
+            if _k in _ov and _valid(_k, _ov[_k]):
                 RELATIVE_STRENGTH[_k] = _ov[_k]
+        if TECHNICAL["rsi_min"] >= TECHNICAL["rsi_max"]:  # inkonsistentes Paar → Defaults
+            TECHNICAL["rsi_min"], TECHNICAL["rsi_max"] = 45, 70
     except Exception:
         pass
