@@ -32,8 +32,10 @@ portfolio.json
 # Kurs-Cache (Laufzeit-Cache, soll das Repo nicht aufblähen)
 cache/prices/
 
-# Fundamentals-Cache (Laufzeit-Cache, TTL 3 Tage — würde sonst täglich
-# von GitHub Actions mitcommitted und nur Rauschen erzeugen)
+# Fundamentals-Laufzeit-Cache (TTL 3 Tage) — bleibt ignoriert, damit lokale
+# App-Läufe die Working Tree nicht verschmutzen. Der von GitHub Actions
+# exportierte Seed (cache/fundamentals_seed.json) ist dagegen BEWUSST getrackt:
+# er wärmt den Cache der deployten App nach jedem Redeploy vor.
 cache/fundamentals.json
 
 # Backtest-Cache (Preise, Ergebnisse, angereicherte Date-Daten — regenerierbar, groß)

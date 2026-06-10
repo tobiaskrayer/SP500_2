@@ -33,6 +33,12 @@ jobs:
       - name: S&P500 Analyse durchführen
         run: python run_analysis.py
 
+      - name: Fundamentals-Seed exportieren
+        # Macht die beim Scan geholten Ticker.info-Daten als git-getrackten
+        # Seed verfügbar — die deployte App spart sich nach dem Redeploy
+        # die 50-150 langsamen .info-Calls (siehe analyzer/fundamentals_cache.py).
+        run: python -m scripts.export_fundamentals_seed
+
       - name: Cache-Ergebnis committen und pushen
         run: |
           git config user.name "github-actions[bot]"
