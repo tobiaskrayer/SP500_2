@@ -214,7 +214,8 @@ def get_date_data(years: int = 10, step_weeks: int = 2, progress_callback=None,
         try:
             with open(_DD_CACHE, "rb") as f:
                 blob = pickle.load(f)
-            if blob.get("years") == years and blob.get("step_weeks") == step_weeks:
+            if (blob.get("years") == years and blob.get("step_weeks") == step_weeks
+                    and blob.get("bt_dates") and blob.get("date_data")):
                 return blob["bt_dates"], blob["date_data"]
         except Exception:
             pass

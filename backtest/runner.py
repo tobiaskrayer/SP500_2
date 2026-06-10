@@ -265,8 +265,7 @@ def _build_precomputed(years: int, step_weeks: int,
     bt_dates = []
     d = start_date
     while d <= end_date:
-        if d.weekday() < 5:
-            bt_dates.append(d)
+        bt_dates.append(d)
         d += timedelta(weeks=step_weeks)
 
     try:

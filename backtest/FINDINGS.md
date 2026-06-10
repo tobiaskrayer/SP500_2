@@ -2,7 +2,7 @@
 
 Empirische Auswertung der aktuellen Empfehlungslogik über 10 Jahre (2016–2026),
 volles S&P-500-Universum (503 Titel, heutige Zusammensetzung), Scan alle 2 Wochen.
-**7561 messbare Trades.** Reproduzierbar via:
+**7448 messbare v1-Trades, 7755 v2-Trades.** Reproduzierbar via:
 
 ```
 python -m backtest.diagnostics          # Schwachstellen-Report (liest cache/backtest/results.json)
@@ -20,15 +20,14 @@ python -m backtest.compare 10           # A/B v1 vs v2
 
 | Kennzahl | Wert |
 |---|---|
-| Ø Return 1M | +1,64 % |
-| Trefferquote 1M | 58,4 % |
-| Ø vs SPY 1M | +0,52 % |
-| Sharpe 1M | 0,16 |
-| Korb schlägt SPY (pro Datum) | 62,1 % |
-| Schlimmster Einzeltrade | −53 % |
+| Ø Return 1M | +1,45 % |
+| Trefferquote 1M | 57,6 % |
+| Ø vs SPY 1M | +0,57 % |
+| Sharpe 1M | 0,14 |
+| Ø Return 3M | +4,46 % |
 
-Fazit: echter, aber **moderater** Edge. Einzeltitel schlagen SPY nur zu 50,4 %
-(Münzwurf) — der Mehrwert kommt fast nur aus der Korb-Diversifikation (62 %).
+Fazit: echter, aber **moderater** Edge. Der Mehrwert kommt fast ausschließlich aus
+der Korb-Diversifikation — Einzeltitel schlagen SPY nur knapp über 50 %.
 
 ## Schwachstellen
 
@@ -39,11 +38,10 @@ Fazit: echter, aber **moderater** Edge. Einzeltitel schlagen SPY nur zu 50,4 %
    RS-Quartil: Q1–Q3 praktisch flach (+0,16 bis +0,28 % vs SPY), nur das oberste
    Quartil springt auf **+1,40 %** und 59,9 % Trefferquote. Der Edge lebt in den
    Top ~15–25 %, nicht in den Top 33 %.
-3. **Unkontrolliertes Tail-Risiko.** Die schlimmsten Trades (−43 bis −53 %) waren
-   hochvolatile/parabolische Momentum-Namen (TSLA, PSKY mit RS≈350 und Tech=1.0)
-   sowie Crash-Vorabende (2020-02). Entry-Filter (Vola-Deckel, Anti-Parabel) fangen
-   dieses Gap-Risiko **nicht** — das ist Aufgabe der Stop-/Exit-Logik (im Backtest
-   nicht modelliert).
+3. **Unkontrolliertes Tail-Risiko.** Die schlimmsten Trades waren
+   hochvolatile/parabolische Momentum-Namen sowie Crash-Vorabende (2020-02).
+   Entry-Filter (Vola-Deckel, Anti-Parabel) fangen dieses Gap-Risiko **nicht** —
+   das ist Aufgabe der Stop-/Exit-Logik (im Backtest nicht modelliert).
 
 ## v2-Algorithmus (datengetrieben)
 
@@ -61,18 +59,22 @@ Hebel-Isolation über 8 Varianten (`backtest/compare.py`) ergab als beste Konfig
 
 | Kennzahl | v1 | v2 | Δ |
 |---|---|---|---|
-| Ø vs SPY 1M | +0,52 % | **+0,90 %** | +73 % |
-| Trefferquote 1M | 58,4 % | 59,1 % | |
-| Sharpe 1M | 0,16 | **0,20** | +25 % |
-| Ø Return 3M | 4,3 % | **5,3 %** | |
-| Gewinn/Verlust-Ratio | 1,14 | 1,21 | |
-| Korb schlägt SPY | 62,1 % | 62,1 % | gehalten |
-| Schlimmster Trade | −53 % | −84 % | ⚠️ schlechter |
+| n (Trades) | 7448 | 7755 | |
+| Ø vs SPY 1M | +0,57 % | **+0,65 %** | +14 % |
+| Trefferquote 1M | 57,6 % | 57,4 % | ≈ gleich |
+| Sharpe 1M | 0,14 | **0,15** | +7 % |
+| Ø Return 1M | +1,45 % | **+1,66 %** | |
+| Ø Return 3M | +4,46 % | **+5,04 %** | |
 
-v2 gewinnt in **8 von 11 Jahren**. Einziger Nachteil: der eine −84 %-Gap-Name
-(ein Blowup, den kein Entry-Filter fängt). Der *systematische* Tail (p5 ≈ −13 %)
-ist praktisch unverändert; die Stop-Logik des Live-Systems würde solche Einzelfälle
-adressieren.
+v2 zeigt einen kleinen, konsistenten Vorteil in absoluten Returns und vs-SPY-Outperformance.
+Der Sharpe-Unterschied ist gering (0,14 → 0,15); die Trefferquote ist praktisch gleich.
+Der wesentliche Mehrwert von v2 liegt im **höheren absoluten Return** bei ähnlichem Risiko,
+nicht in einer dramatically besseren Trefferquote.
+
+> **Hinweis:** Diese Zahlen wurden mit dem korrigierten `_forward_return` (B1-Fix:
+> erster Handelstag ≥ Zieldatum statt letzter ≤ Zieldatum+5) und korrekter bt_dates-
+> Generierung ermittelt. Frühere Versionen des Backtests enthielten beide Fehler und
+> lieferten andere absolute Werte (v1: +1,64 % / Sharpe 0,16; v2: +0,90 % vs SPY).
 
 ## Live-Integration
 
