@@ -99,6 +99,12 @@ ANALYSIS = {
 # A/B-Ergebnis 10J: vs SPY +0.90 % statt +0.52 %, Sharpe 0.20 statt 0.16.
 RECOMMENDER_V2 = {
     "rs_top_percentile": 0.20,   # strenger als v1 (0.33)
+    # Top-N-Begrenzung (Filter-Experimente 10J, scripts/experiment_filters.py):
+    # Konzentration auf die RS-stärksten Titel dominiert alle anderen Hebel.
+    # Top-10: +2,12 % vs SPY (Korb 43 Titel: +0,65 %), 11/11 Jahre positiv;
+    # Top-5 nochmal stärker (+3,19 %), wird daher gesondert markiert.
+    "top_n": 10,                 # v2 empfiehlt nur die N RS-stärksten Survivors
+    "top_n_strong": 5,           # davon die ersten N als "Top-Pick" markiert
     # Warnschwelle für "parabolische" / überdehnte Titel auf der Kauf-Kandidaten-Seite.
     # rs_score = rs_3m + rs_6m (Outperformance vs. S&P500 in Prozentpunkten). Sehr hohe
     # Werte = extrem gelaufen → im 10J-Backtest die schlimmsten Crash-Trades. Nur Hinweis,

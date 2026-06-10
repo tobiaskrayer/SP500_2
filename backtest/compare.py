@@ -65,6 +65,10 @@ PARAMS_V2 = {
     "require_not_overbought": True,
     "vol_cap_annual":     1e9,     # deaktiviert
     "rs_parabolic_cap":   1e9,     # deaktiviert
+    # Top-N-Begrenzung (Filter-Experimente, scripts/experiment_filters.py):
+    # Konzentration auf die N RS-stärksten dominiert alle anderen Hebel —
+    # Top-10: +2,12 % vs SPY (11/11 Jahre positiv) statt +0,65 % beim vollen Korb.
+    "top_n":              10,
 }
 
 
@@ -173,8 +177,12 @@ def _select_v2(ticker_data: dict, p: dict) -> list:
     if not cands:
         return []
     cutoff = float(np.percentile([c[1]["rs_score"] for c in cands], (1 - p["rs_top_percentile"]) * 100))
-    return [(tk, td) for tk, td in cands
-            if td["rs_score"] >= cutoff and td["rs_6m"] >= p["rs_min_6m"]]
+    sel = [(tk, td) for tk, td in cands
+           if td["rs_score"] >= cutoff and td["rs_6m"] >= p["rs_min_6m"]]
+    top_n = p.get("top_n")
+    if top_n:
+        sel = sorted(sel, key=lambda x: -x[1]["rs_score"])[:top_n]
+    return sel
 
 
 def _simulate_strategy(date_data: dict, bt_dates: list, select_fn, params: dict) -> list:

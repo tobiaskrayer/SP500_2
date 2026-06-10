@@ -346,11 +346,16 @@ def page_buy_candidates(result: dict | None):
         return
 
     v2_tickers = {r.get("ticker") for r in v2}
+    # v2-Rang (1..top_n) + MACD je Ticker — für Top-5-Markierung und Tiebreaker-Anzeige
+    v2_rank_by_ticker = {r.get("ticker"): r.get("v2_rank") for r in v2}
+    macd_by_ticker = {r.get("ticker"): r.get("macd_bull") for r in v2}
     try:
         from config import RECOMMENDER_V2 as _rec_v2_cfg
         parabolic_thr = _rec_v2_cfg.get("parabolic_rs_warn", 150.0)
+        top_n_strong = _rec_v2_cfg.get("top_n_strong", 5)
     except Exception:
         parabolic_thr = 150.0
+        top_n_strong = 5
 
     # Schritt 2: v1∩v2-Schnittmenge (volle v1-Dicts haben exits/rs/sector)
     candidates = []
@@ -368,6 +373,10 @@ def page_buy_candidates(result: dict | None):
         price = r.get("price")
         stop = exits.get("stop_loss")
         stop_pct = round((stop / price - 1) * 100, 1) if (stop and price) else None
+        v2_rank = v2_rank_by_ticker.get(r.get("ticker"))
+        macd_bull = r.get("macd_bull")
+        if macd_bull is None:
+            macd_bull = macd_by_ticker.get(r.get("ticker"))
         entry = {
             "ticker": r.get("ticker"),
             "name": (r.get("name") or "")[:26],
@@ -379,6 +388,9 @@ def page_buy_candidates(result: dict | None):
             "stop": stop,
             "stop_pct": stop_pct,
             "exit_rec": exit_rec,
+            "v2_rank": v2_rank,
+            "top5": bool(v2_rank is not None and v2_rank <= top_n_strong),
+            "macd_bull": macd_bull,
         }
         if exit_rec == "Beobachten":
             watch_only.append(entry)
@@ -396,12 +408,16 @@ def page_buy_candidates(result: dict | None):
 
     clean = [c for c in candidates if not c["parabolic"]]
     n_total = len(candidates)
+    n_top5 = sum(1 for c in candidates if c["top5"])
 
     # ── Kopf-Kennzahlen ────────────────────────────────────────────────────────
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Kandidaten (v1∩v2)", n_total)
-    c2.metric("davon sauber (nicht parabolisch)", len(clean))
-    c3.metric("⚠️ Beobachten", len(watch_only),
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Kandidaten (v1∩v2)", n_total,
+              help="v2 ist auf die 10 RS-stärksten begrenzt (Top-N-Befund im 10J-Backtest).")
+    c2.metric("⭐ davon Top-5", n_top5,
+              help="Die 5 RS-stärksten v2-Picks — im Backtest die stärkste Gruppe (+3,2 % vs SPY/Monat).")
+    c3.metric("davon sauber (nicht parabolisch)", len(clean))
+    c4.metric("⚠️ Beobachten", len(watch_only),
               help="In der Schnittmenge, zeigen aber bereits erste Exit-Signale — nachrangig.")
 
     # ── Gleichgewichtungs-Rechner ───────────────────────────────────────────────
@@ -423,20 +439,29 @@ def page_buy_candidates(result: dict | None):
     st.subheader("📊 Rangliste")
     st.caption(
         "Rang nach **RS-Score** — das einzige im 10-Jahres-Backtest vorhersagestarke Signal "
-        "(relative Stärke vs. Markt). Saubere Titel zuerst, parabolische (⚡) ans Ende demotet, "
-        "da sie trotz hohem RS crash-anfällig sind. Stop-Loss vom ersten Tag an setzen."
+        "(relative Stärke vs. Markt). ⭐ = Top-5 des v2-Rankings (stärkste Gruppe im Backtest). "
+        "Saubere Titel zuerst, parabolische (⚡) ans Ende demotet, da sie trotz hohem RS "
+        "crash-anfällig sind. MACD ist reine Zusatz-Info (Tiebreaker): bullisch reduziert "
+        "historisch das Worst-Case-Risiko, kostet als harter Filter aber Rendite. "
+        "**Zum Stop-Loss:** Die Stop-Simulation (backtest/stop_sim.py) zeigt, dass enge "
+        "ATR-Stops bei 1–8-Wochen-Momentum mehr Rendite kosten als sie schützen — der "
+        "angezeigte Stop taugt als *weiter Katastrophen-Schutz*, nicht als enge Reißleine. "
+        "Risikokontrolle primär über Korbbreite (gleichgewichtet streuen) und das Markt-Gate."
     )
 
     # Sortierung: erst saubere nach RS absteigend, dann parabolische nach RS absteigend.
     ranked = sorted(candidates, key=lambda x: (x["parabolic"], -(x["rs_score"] or 0)))
     rows = []
     for i, c in enumerate(ranked, 1):
+        macd = c.get("macd_bull")
         rows.append({
             "Rang": i,
-            "Ticker": ("⚡ " if c["parabolic"] else "") + c["ticker"],
+            "Ticker": ("⭐ " if c["top5"] else "") + ("⚡ " if c["parabolic"] else "") + c["ticker"],
             "Name": c["name"],
             "Sektor": c["sector"],
+            "v2-Rang": c["v2_rank"] if c["v2_rank"] is not None else "—",
             "RS-Score": c["rs_score"],
+            "MACD": "🟢" if macd else ("🔴" if macd is not None else "—"),
             "Konfidenz": c["confidence"],
             "Kurs": f"${c['price']:.2f}" if c["price"] else "—",
             "Stop-Loss": f"${c['stop']:.2f}" if c["stop"] else "—",
@@ -495,23 +520,30 @@ def _render_v2_panel(result: dict, recommendations: list):
                      f"({len(both)} Überschneidung mit v1)", expanded=False):
         st.caption(
             "**v2** ist eine datengetriebene Alternative aus dem 10-Jahres-Backtest: strengerer "
-            "RS-Schnitt (Top 20 %), Trend-Pflicht (über MA50 & MA200), nicht überkauft — **ohne** "
-            "die Tech-Score-Schwelle (die historisch keine Vorhersagekraft hatte). Im Backtest schlug "
-            "v2 den SPY um +0,90 %/Monat (v1: +0,52 %). Läuft parallel, ändert die v1-Empfehlungen oben nicht."
+            "RS-Schnitt (Top 20 %), Trend-Pflicht (über MA50 & MA200), nicht überkauft, begrenzt "
+            "auf die **10 RS-stärksten** (Top-N-Befund) — **ohne** die Tech-Score-Schwelle (die "
+            "historisch keine Vorhersagekraft hatte). Im Backtest (Top-10): +2,12 % vs SPY/Monat "
+            "(v1-Korb: +0,27 %), ⭐ Top-5 sogar +3,19 %. Achtung: absolute Zahlen wegen "
+            "Survivorship-Bias optimistisch. Läuft parallel, ändert die v1-Empfehlungen oben nicht."
         )
         if not v2_tickers:
             st.info("v2 hat aktuell keine Empfehlungen (strengerer Filter als v1).")
             return
 
         rows = []
-        for r in sorted(v2, key=lambda x: -(x.get("rs", {}).get("rs_score") or 0)):
+        for r in sorted(v2, key=lambda x: (x.get("v2_rank") or 99,
+                                           -(x.get("rs", {}).get("rs_score") or 0))):
             tk = r.get("ticker")
             rs = r.get("rs", {})
+            rank = r.get("v2_rank")
+            macd = r.get("macd_bull")
             rows.append({
-                "Ticker": tk,
+                "Rang": rank if rank is not None else "—",
+                "Ticker": ("⭐ " if (rank is not None and rank <= 5) else "") + tk,
                 "Name": (r.get("name") or "")[:28],
                 "Sektor": r.get("sector") or "—",
                 "RS-Score": round(rs.get("rs_score") or 0, 1),
+                "MACD": "🟢" if macd else ("🔴" if macd is not None else "—"),
                 "Tech": f"{(r.get('tech_score') or 0)*100:.0f}%",
                 "Fund": f"{(r.get('fund_score') or 0)*100:.0f}%",
                 "auch in v1": "✅" if tk in both else "—",

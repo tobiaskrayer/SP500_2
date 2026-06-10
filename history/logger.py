@@ -149,6 +149,9 @@ def _extract_v2_recommendation(r: dict) -> dict:
         "fund_score": r.get("fund_score"),
         "rs_3m": rs.get("rs_3m"),
         "rs_6m": rs.get("rs_6m"),
+        # Top-N-Rang (1..10) — erlaubt Out-of-Sample-Vergleich Top-5 vs Top-10
+        "v2_rank": r.get("v2_rank"),
+        "macd_bull": r.get("macd_bull"),
     }
 
 

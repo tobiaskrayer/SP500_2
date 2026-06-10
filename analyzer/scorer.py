@@ -31,7 +31,9 @@ _SLIM_KEYS = ("ticker", "name", "sector", "recommended",
               "tech_score", "fund_score", "combined_score",
               "confidence_label", "price",
               # v2-Parallelalgorithmus (additiv)
-              "recommended_v2", "gate_rs_v2", "trend_ok", "not_overbought")
+              "recommended_v2", "gate_rs_v2", "trend_ok", "not_overbought",
+              # v2-Rang (1..top_n) + MACD als Tiebreaker-Anzeige
+              "v2_rank", "macd_bull")
 
 
 def _slim(r: dict) -> dict:
@@ -210,6 +212,22 @@ def _apply_rs_percentile(results: list, market: dict) -> list:
             gate_rs_v2 and r.get("trend_ok", False)
             and r.get("not_overbought", False) and r.get("gate_fund", False)
         )
+        r["v2_rank"] = None
+
+    # Top-N-Begrenzung: nur die N RS-stärksten v2-Survivors empfehlen.
+    # Filter-Experimente (scripts/experiment_filters.py, 10J-Daten): Konzentration
+    # auf Top-10 hebt vs SPY von +0,65 % auf +2,12 %/Monat bei 11/11 positiven
+    # Jahren; die Top-5 sind nochmal stärker und werden via v2_rank markiert.
+    top_n = RECOMMENDER_V2.get("top_n", 10)
+    v2_survivors = sorted(
+        (r for r in results if r["recommended_v2"]),
+        key=lambda x: -(x.get("rs", {}).get("rs_score") or 0),
+    )
+    for rank, r in enumerate(v2_survivors, 1):
+        if rank <= top_n:
+            r["v2_rank"] = rank
+        else:
+            r["recommended_v2"] = False
 
     return results
 
@@ -377,6 +395,9 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
             # v2-Sub-Flags (RS-Schnitt folgt im Post-Pass)
             "trend_ok": trend_ok,
             "not_overbought": not_overbought,
+            # MACD als Tiebreaker-Anzeige (kein Filter — kostet im Backtest Rendite,
+            # verbessert aber den schlechtesten Trade deutlich; siehe FINDINGS.md)
+            "macd_bull": bool(_sig.get("MACD bullisch")),
             # Scores
             "tech_score": tech["score"],
             "fund_score": fund["score"],
