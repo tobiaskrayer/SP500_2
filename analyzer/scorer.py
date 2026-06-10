@@ -17,6 +17,7 @@ from analyzer.market_filter import check_market
 from analyzer.relative_strength import check_relative_strength
 from analyzer.technical import check_technical
 from analyzer.fundamental import check_fundamental
+from analyzer.fundamentals_cache import get_info_cached
 from analyzer.confidence import compute_confidence
 from analyzer.exits import compute_exits, inject_external_signals
 from analyzer.upside import compute_upside
@@ -259,7 +260,10 @@ def _batch_download(tickers: list) -> dict:
                 auto_adjust=True,
                 progress=False,
                 group_by="ticker",
-                threads=False,  # kein internes Threading — vermeidet Parallelcalls
+                # Begrenztes Threading: threads=False lud ~500 Ticker sequenziell
+                # (Minuten beim ersten Tages-Scan). 8 parallele Requests sind
+                # weit unter Yahoos Rate-Limit, aber ~8x schneller.
+                threads=8,
             )
             if raw is None or raw.empty:
                 logger.warning(f"Batch {batch_num}: leere Antwort")
@@ -322,13 +326,10 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
 
         # Gate 4: Fundamentalanalyse — nur wenn Gate 3 bestanden.
         # Gate 2 (RS-Rang) wird erst im Post-Pass bestimmt; Gate 3 als Filter reicht.
+        # info kommt aus dem Fundamentals-Cache (TTL 3 Tage) — Ticker.info ist der
+        # teuerste Einzelcall im Scan und ändert sich nur quartalsweise.
         if tech["passed"]:
-            try:
-                if stock is None:
-                    stock = yf.Ticker(ticker)
-                info = stock.info
-            except Exception:
-                info = {}
+            info = get_info_cached(ticker)
         else:
             info = {}
         fund = check_fundamental(info)

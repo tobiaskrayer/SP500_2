@@ -87,7 +87,10 @@ CACHE = {
 # --- Analyse ---
 ANALYSIS = {
     "history_days": 365,   # Kursdaten der letzten 365 Tage laden
-    "max_workers": 3,      # Parallele Downloads (yfinance) — niedrig halten gegen Rate-Limit
+    # Analyse-Pool: seit Batch-Download + Fundamentals-Cache machen die Worker
+    # fast nur CPU-Arbeit (Indikatoren); Netzwerk nur bei Cache-Miss von
+    # Ticker.info (Gate-3-Passer, alle 3 Tage). 8 statt 3 beschleunigt beides.
+    "max_workers": 8,
 }
 
 # --- Paralleler v2-Empfehlungsalgorithmus ---

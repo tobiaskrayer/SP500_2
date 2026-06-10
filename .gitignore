@@ -32,6 +32,10 @@ portfolio.json
 # Kurs-Cache (Laufzeit-Cache, soll das Repo nicht aufblähen)
 cache/prices/
 
+# Fundamentals-Cache (Laufzeit-Cache, TTL 3 Tage — würde sonst täglich
+# von GitHub Actions mitcommitted und nur Rauschen erzeugen)
+cache/fundamentals.json
+
 # Backtest-Cache (Preise, Ergebnisse, angereicherte Date-Daten — regenerierbar, groß)
 cache/backtest/
 # param_overrides.json bleibt versioniert (kleine Konfig), liegt aber in backtest/ —
