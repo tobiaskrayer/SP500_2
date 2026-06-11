@@ -250,6 +250,24 @@ def _forward_return(indicator_df: pd.DataFrame, from_date: date, days: int) -> f
 
 # ── Gemeinsames Setup ─────────────────────────────────────────────────────────
 
+def _make_bt_dates(years: int, step_weeks: int, end_date: date | None = None) -> list[date]:
+    """
+    Simulations-Daten im step_weeks-Raster, rückwärts ab heute−35 Tagen.
+    Bewusst OHNE Wochentagsfilter: bei 14-Tage-Schritten landet jedes Datum
+    auf demselben Wochentag — ein Mo–Fr-Filter lieferte daher entweder alles
+    oder (Start am Wochenende) eine LEERE Liste. _slice_to_date bildet
+    Wochenenden ohnehin auf den letzten Handelstag ab.
+    """
+    end = end_date or (date.today() - timedelta(days=35))
+    start = end - timedelta(days=365 * years)
+    bt_dates = []
+    d = start
+    while d <= end:
+        bt_dates.append(d)
+        d += timedelta(weeks=step_weeks)
+    return bt_dates
+
+
 def _build_precomputed(years: int, step_weeks: int,
                        progress_callback=None) -> tuple[dict, object, list, list]:
     """
@@ -259,14 +277,7 @@ def _build_precomputed(years: int, step_weeks: int,
     """
     os.makedirs(_BACKTEST_CACHE_DIR, exist_ok=True)
 
-    end_date = date.today() - timedelta(days=35)
-    start_date = end_date - timedelta(days=365 * years)
-
-    bt_dates = []
-    d = start_date
-    while d <= end_date:
-        bt_dates.append(d)
-        d += timedelta(weeks=step_weeks)
+    bt_dates = _make_bt_dates(years, step_weeks)
 
     try:
         from analyzer.universe import get_sp500_tickers

@@ -1,0 +1,30 @@
+name: Tests
+
+# Läuft bei jedem Push/PR auf main. Die täglichen Analyse-Commits tragen
+# "[skip ci]" und lösen den Lauf daher nicht aus.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    name: pytest (netzwerkfrei)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements.txt pytest
+
+      - name: Tests ausführen
+        run: pytest tests/ -q
