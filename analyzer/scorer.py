@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from analyzer.universe import get_sp500_tickers
+from analyzer.universe import get_sp500_tickers, get_universe_info
 from analyzer.market_filter import check_market
 from analyzer.relative_strength import check_relative_strength
 from analyzer.technical import check_technical
@@ -164,6 +164,9 @@ def run_full_scan(progress_callback=None) -> dict:
         "recommendations_v2": recommendations_v2,
         "all_results": all_results,
         "scan_duration_s": round(time.time() - start, 1),
+        # Quelle/Größe der Tickerliste — UI warnt bei degradiertem Universum
+        # (Fallback verschiebt das RS-Perzentil-Ranking komplett).
+        "universe": get_universe_info(),
     }
 
 

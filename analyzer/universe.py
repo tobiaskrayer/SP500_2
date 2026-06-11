@@ -1,14 +1,27 @@
 """
 Lädt die aktuelle S&P500-Tickerliste von Wikipedia.
-Fallback: hartcodierte Liste der Top-100-Werte.
+
+Fallback-Kette (jede Stufe wird im Scan-Ergebnis sichtbar gemacht):
+  1. Wikipedia (live) — bei Erfolg als "letzte gute Liste" gecacht
+  2. cache/sp500_universe.json — letzte erfolgreich geladene Liste
+  3. hartcodierte Top-100 (Notnagel; verzerrt das RS-Perzentil-Ranking!)
+
+get_universe_info() liefert Quelle + Größe des letzten Abrufs — die UI
+warnt damit, wenn der Scan auf einem degradierten Universum lief.
 """
 
+import json
+import os
 import pandas as pd
 import logging
 
 logger = logging.getLogger(__name__)
 
 SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+_UNIVERSE_CACHE = os.path.join(os.path.dirname(__file__), "..", "cache", "sp500_universe.json")
+
+# Metadaten des letzten Abrufs: {"source": "wikipedia"|"cache"|"fallback", "n": int}
+_last_info: dict = {"source": None, "n": 0}
 
 
 def get_sp500_tickers() -> list[str]:
@@ -21,8 +34,14 @@ def get_sp500_names() -> dict[str, str]:
     return {t: n for t, n in _fetch_sp500_table()}
 
 
+def get_universe_info() -> dict:
+    """Quelle + Größe der zuletzt geladenen Tickerliste (für UI-Warnungen)."""
+    return dict(_last_info)
+
+
 def _fetch_sp500_table() -> list[tuple[str, str]]:
-    """Lädt Ticker + Firmennamen von Wikipedia. Fallback auf hartcodierte Liste."""
+    """Lädt Ticker + Firmennamen von Wikipedia, mit zweistufigem Fallback."""
+    global _last_info
     try:
         # User-Agent nötig — Wikipedia blockt Requests ohne ihn mit HTTP 403.
         # Ohne diesen Header fiele das Tool still auf die 100er-Fallback-Liste zurück.
@@ -45,11 +64,48 @@ def _fetch_sp500_table() -> list[tuple[str, str]]:
             if name in ("nan", "None", ""):
                 name = ticker
             result.append((ticker, name))
+        if len(result) < 400:
+            # Layout-Änderung/Teilantwort: lieber Fallback als stilles Mini-Universum
+            raise ValueError(f"Wikipedia lieferte nur {len(result)} Titel")
         logger.info(f"S&P500-Tabelle geladen: {len(result)} Titel")
+        _save_universe_cache(result)
+        _last_info = {"source": "wikipedia", "n": len(result)}
         return result
     except Exception as e:
-        logger.warning(f"Wikipedia-Abruf fehlgeschlagen: {e} — nutze Fallback-Liste")
-        return _fallback_table()
+        logger.warning(f"Wikipedia-Abruf fehlgeschlagen: {e} — versuche letzte gute Liste")
+
+    cached = _load_universe_cache()
+    if cached:
+        logger.warning(f"Nutze gecachte Universum-Liste ({len(cached)} Titel)")
+        _last_info = {"source": "cache", "n": len(cached)}
+        return cached
+
+    logger.warning("Kein Universum-Cache — nutze hartcodierte Top-100-Fallback-Liste")
+    fb = _fallback_table()
+    _last_info = {"source": "fallback", "n": len(fb)}
+    return fb
+
+
+def _save_universe_cache(table: list[tuple[str, str]]):
+    try:
+        os.makedirs(os.path.dirname(_UNIVERSE_CACHE), exist_ok=True)
+        tmp = _UNIVERSE_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(table, f, ensure_ascii=False)
+        os.replace(tmp, _UNIVERSE_CACHE)
+    except Exception as e:
+        logger.debug(f"Universum-Cache Schreibfehler: {e}")
+
+
+def _load_universe_cache() -> list[tuple[str, str]] | None:
+    try:
+        with open(_UNIVERSE_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list) and len(data) >= 400:
+            return [(str(t), str(n)) for t, n in data]
+    except Exception:
+        pass
+    return None
 
 
 def _fallback_tickers() -> list[str]:

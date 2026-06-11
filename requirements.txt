@@ -1,9 +1,13 @@
-streamlit>=1.32
-yfinance>=0.2.37
-pandas>=2.0
-numpy>=1.26
-lxml>=5.0
-plotly>=5.20
-apscheduler>=3.10
-requests>=2.31
-supabase>=2.0
+# Exakt gepinnt: Der taegliche GitHub-Actions-Lauf installiert frisch —
+# ohne Pinning legt ein Breaking Change (v. a. yfinance) den Scan ohne
+# jede Code-Aenderung lahm. Updates bewusst durchfuehren:
+#   pip install -U <paket>  ->  pytest  ->  Version hier anpassen.
+streamlit==1.55.0
+yfinance==1.2.0
+pandas==2.3.3
+numpy==2.4.2
+lxml==6.1.1
+plotly==6.6.0
+apscheduler==3.11.2
+requests==2.32.5
+supabase==2.31.0

@@ -45,12 +45,54 @@ def save_cache(data: dict):
     try:
         # Serialisierbare Kopie erstellen (pandas-Objekte entfernen)
         serializable = _make_serializable(data)
+        _slim_for_cache(serializable)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(serializable, f, ensure_ascii=False, indent=2)
+            json.dump(serializable, f, ensure_ascii=False)
         logger.info(f"Cache gespeichert: {path}")
         _cleanup_old_cache()
     except Exception as e:
         logger.error(f"Cache-Schreibfehler: {e}")
+
+
+# Chart-Serien in tech.indicators, die die App tatsächlich zeichnet.
+# "close" (redundant zu hist.Close) und "bb_ma" (ungenutzt) fliegen raus.
+_CHART_SERIES = ("ma50", "ma200", "rsi", "macd_line", "signal_line",
+                 "histogram", "bb_upper", "bb_lower")
+
+
+def _slim_for_cache(serializable: dict):
+    """
+    Verschlankt die Empfehlungs-Dicts für die Cache-Datei (in-place).
+
+    Die Detail-Charts brauchen nur Werte-Listen (geplottet wird über die
+    Position, nicht das Datum) — als Series→Dict serialisiert schleppen sie
+    aber ~27 Zeichen Datums-Key pro Punkt mit. Listen + Rundung auf 4
+    Nachkommastellen reduzieren die Datei von ~6 MB auf unter 1 MB; das zählt,
+    weil GitHub Actions sie täglich ins Repo committed (Git-Historie wächst
+    sonst unbegrenzt). Der Markt-Chart nutzt die Datums-Keys als x-Achse —
+    market bleibt deshalb unberührt.
+    """
+    def _vals(obj) -> list | None:
+        if isinstance(obj, dict):
+            obj = list(obj.values())
+        if isinstance(obj, list):
+            return [None if v is None else round(v, 4) for v in obj]
+        return None
+
+    for rec in serializable.get("recommendations", []):
+        hist = rec.get("hist")
+        if isinstance(hist, dict):
+            close = _vals(hist.get("Close"))
+            rec["hist"] = {"Close": close} if close is not None else None
+
+        ind = (rec.get("tech") or {}).get("indicators")
+        if isinstance(ind, dict):
+            ind.pop("close", None)
+            ind.pop("bb_ma", None)
+            for key in _CHART_SERIES:
+                vals = _vals(ind.get(key))
+                if vals is not None:
+                    ind[key] = vals
 
 
 def _make_serializable(data: dict) -> dict:
