@@ -43,8 +43,10 @@ SUPABASE_ANON_KEY = "<anon-key>"
 Erwartete Tabellen: `lots` (offene Kauf-Lots) und `realized_trades`
 (abgeschlossene Trades), jeweils mit `user_id`-Spalte.
 **Wichtig bei mehreren Nutzern:** Auf beiden Tabellen Row-Level-Security
-aktivieren mit Policies `user_id = auth.uid()` — die App filtert zwar
-klientseitig, aber nur RLS erzwingt die Isolation serverseitig.
+aktivieren — die App filtert zwar klientseitig, aber nur RLS erzwingt die
+Isolation serverseitig. Fertiges, idempotentes SQL:
+[scripts/supabase_rls.sql](scripts/supabase_rls.sql) (im Supabase
+SQL-Editor ausführen); Schnell-Check: `python scripts/check_rls.py`.
 
 ## Betrieb / Datenflüsse
 
