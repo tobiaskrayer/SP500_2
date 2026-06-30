@@ -68,10 +68,19 @@ EXITS = {
 }
 
 # --- Erwartetes Upside (separate Magnitude-Kennzahl) ---
+# Rebalanced nach Performance-Report 2026-07: das Label "Hoch" underperformte "Mittel"
+# (auch nach Korrektur des Split-Bugs). Ursache: die 52w-Distanz ist eine
+# Mean-Reversion-These und korreliert mit -0,46 zur realisierten 1M-Rendite — sie
+# belohnt also Nachzügler, die der Momentum-/RS-Ansatz gerade meidet. Daher 52w stark
+# abgewertet (+ Cap in upside.py); Gewicht zu ATR (legitime Bewegungs-Magnitude) und
+# Wachstum (fundamental) verschoben.
+# HINWEIS: Basis war ein einzelnes ~2-Monats-Fenster (n=156). Schwellen bewusst
+# unverändert (kein Overfitting); Gewichte + Label-Verteilung nach dem nächsten
+# Datenzyklus erneut validieren.
 UPSIDE = {
-    "weight_atr":    0.40,   # Gewicht: ATR-basiertes Kursziel (3*ATR/Kurs)
-    "weight_52w":    0.40,   # Gewicht: Distanz zum 52-Wochen-Hoch
-    "weight_growth": 0.20,   # Gewicht: Umsatz-/Gewinnwachstum (fundamental)
+    "weight_atr":    0.45,   # Gewicht: ATR-basiertes Kursziel (3*ATR/Kurs)
+    "weight_52w":    0.15,   # Gewicht: Distanz zum 52-Wochen-Hoch (anti-Momentum → klein)
+    "weight_growth": 0.40,   # Gewicht: Umsatz-/Gewinnwachstum (fundamental)
     "threshold_high": 15.0,  # expected_upside_pct ≥ 15% → "Hoch"
     "threshold_mid":   7.0,  # expected_upside_pct ≥  7% → "Mittel"
     # darunter → "Gering"

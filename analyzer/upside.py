@@ -63,6 +63,13 @@ def compute_upside(
         result["upside_atr_pct"] = round(3 * atr / current_price * 100, 2)
 
     # ── 2. 52-Wochen-Hoch ─────────────────────────────────────────────────────
+    # ACHTUNG: Die Distanz zum 52w-Hoch ist eine Mean-Reversion-These und steht damit
+    # im Widerspruch zum Momentum-/RS-Ansatz des restlichen Systems. Empirisch
+    # (Performance-Report 2026-07): die Distanz korreliert mit -0,46 zur realisierten
+    # 1M-Rendite — sie belohnt also Nachzügler, die genau gemieden werden sollen.
+    # Deshalb: niedriges Gewicht (config.UPSIDE) UND Cap, damit ein tief gefallener
+    # Titel das Upside nicht künstlich aufbläht und ins "Hoch"-Label kippt.
+    _MAX_52W_UPSIDE = 25.0
     try:
         if hist is not None and len(hist) >= 20:
             close = hist["Close"] if hasattr(hist, "__getitem__") else None
@@ -71,7 +78,8 @@ def compute_upside(
                 high_52w = float(close.max() if hasattr(close, "max") else max(close))
                 if high_52w > current_price:
                     result["upside_52w_pct"] = round(
-                        (high_52w - current_price) / current_price * 100, 2
+                        min((high_52w - current_price) / current_price * 100,
+                            _MAX_52W_UPSIDE), 2
                     )
                 else:
                     result["upside_52w_pct"] = 0.0
