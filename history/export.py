@@ -13,6 +13,15 @@ from history.analytics import (
 )
 
 
+def _pct(value) -> str:
+    """Score (0–1) als Prozent — robust gegen fehlende UND None-Werte.
+
+    `r.get(key, 0)` schützt nur gegen fehlende Keys; ein vorhandener None-Wert
+    (z. B. bei Empfehlungen ohne berechneten Score) ergäbe sonst None*100 → TypeError.
+    """
+    return f"{(value or 0) * 100:.0f}%"
+
+
 def generate_markdown_report(enriched_recs: list[dict]) -> str:
     """
     Generiert einen Markdown-Report, der direkt an Claude gegeben werden kann,
@@ -171,8 +180,8 @@ def generate_markdown_report(enriched_recs: list[dict]) -> str:
         lines.append("")
         for r in worst:
             lines.append(f"### {r['ticker']} ({r['rec_date']}) → {r['performance_1m']:+.1f}%")
-            lines.append(f"- Konfidenz: {r.get('confidence_label','—')} (Score: {r.get('combined_score',0)*100:.0f}%)")
-            lines.append(f"- Tech-Score: {r.get('tech_score',0)*100:.0f}% | Fund-Score: {r.get('fund_score',0)*100:.0f}%")
+            lines.append(f"- Konfidenz: {r.get('confidence_label','—')} (Score: {_pct(r.get('combined_score'))})")
+            lines.append(f"- Tech-Score: {_pct(r.get('tech_score'))} | Fund-Score: {_pct(r.get('fund_score'))}")
             lines.append(f"- RS 3M: {r.get('rs_3m','N/A')}% | RS 6M: {r.get('rs_6m','N/A')}%")
             lines.append(f"- Sektor: {r.get('sector','N/A')}")
             lines.append(f"- Markt-VIX zum Zeitpunkt: {(r.get('market_context') or {}).get('vix','N/A')}")
@@ -197,7 +206,7 @@ def generate_markdown_report(enriched_recs: list[dict]) -> str:
     if best:
         for r in best:
             lines.append(f"### {r['ticker']} ({r['rec_date']}) → {r['performance_1m']:+.1f}%")
-            lines.append(f"- Konfidenz: {r.get('confidence_label','—')} | Tech: {r.get('tech_score',0)*100:.0f}% | Fund: {r.get('fund_score',0)*100:.0f}%")
+            lines.append(f"- Konfidenz: {r.get('confidence_label','—')} | Tech: {_pct(r.get('tech_score'))} | Fund: {_pct(r.get('fund_score'))}")
             lines.append(f"- Sektor: {r.get('sector','N/A')} | VIX: {(r.get('market_context') or {}).get('vix','N/A')}")
             lines.append("")
     else:
