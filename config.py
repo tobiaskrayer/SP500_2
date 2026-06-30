@@ -84,6 +84,14 @@ CACHE = {
     "refresh_hour": 18,     # Tägliche Aktualisierung um 18:00 Uhr (nach US-Marktschluss)
 }
 
+# --- Netzwerk ---
+NETWORK = {
+    # Hartes Timeout pro HTTP-Request (Connect + Read) für alle yfinance-/Wikipedia-Calls.
+    # Verhindert, dass ein hängender Socket-Read den Scan-Thread stundenlang blockiert
+    # (Ticker.info und Ticker.history() übergeben sonst KEIN Timeout an requests).
+    "request_timeout_sec": 15,
+}
+
 # --- Analyse ---
 ANALYSIS = {
     "history_days": 365,   # Kursdaten der letzten 365 Tage laden

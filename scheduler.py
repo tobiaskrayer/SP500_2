@@ -6,6 +6,7 @@ Wird von app.py beim Start gestartet.
 
 import json
 import os
+import time
 import logging
 import threading
 from datetime import datetime, date
@@ -16,7 +17,13 @@ from config import CACHE
 logger = logging.getLogger(__name__)
 
 _scan_running = False
+_scan_started_at: float | None = None  # time.time() bei Start des laufenden Scans
+_scan_epoch = 0                         # Generations-Zähler; steigt bei force-Restart
 _scan_lock = threading.Lock()
+
+# Ein Scan, der länger als das hier läuft, gilt als "möglicherweise verhakt".
+# Ein normaler Full-Scan über das S&P500-Universum dauert nur wenige Minuten.
+SCAN_STALE_AFTER_SEC = 15 * 60
 
 
 def get_cache_path(for_date: date = None) -> Path:
@@ -143,21 +150,68 @@ def is_scan_running() -> bool:
     return _scan_running
 
 
-def trigger_scan_background(on_complete=None):
-    """Startet den Scan in einem Hintergrund-Thread."""
-    global _scan_running
+def scan_runtime_seconds() -> float | None:
+    """Sekunden seit Start des laufenden Scans, oder None wenn keiner läuft."""
+    if not _scan_running or _scan_started_at is None:
+        return None
+    return max(0.0, time.time() - _scan_started_at)
+
+
+def scan_looks_stale() -> bool:
+    """True, wenn der laufende Scan ungewöhnlich lange dauert (vermutlich verhakt)."""
+    rt = scan_runtime_seconds()
+    return rt is not None and rt > SCAN_STALE_AFTER_SEC
+
+
+def force_reset_scan():
+    """
+    Setzt den Scan-Status hart zurück — Notausstieg, falls sich ein Scan verhakt hat.
+
+    Der laufende Hintergrund-Thread wird per Epoch-Wechsel entkoppelt: Er kann den
+    Status danach nicht mehr verändern und seine Ergebnisse werden verworfen. Python
+    kann den Thread nicht hart killen — ein an einem Netzwerk-Call hängender Scan läuft
+    als Zombie weiter, bis der Call zurückkehrt, beeinflusst den Status aber nicht mehr.
+    """
+    global _scan_running, _scan_started_at, _scan_epoch
+    with _scan_lock:
+        _scan_epoch += 1
+        _scan_running = False
+        _scan_started_at = None
+    logger.info("Scan-Status zurückgesetzt (force reset)")
+
+
+def trigger_scan_background(on_complete=None, force=False):
+    """
+    Startet den Scan in einem Hintergrund-Thread.
+
+    force=True bricht einen evtl. verhakten laufenden Scan ab und startet frisch:
+    Der alte Thread wird per Epoch entkoppelt und kann Status/Ergebnis nicht mehr
+    beeinflussen.
+    """
+    global _scan_running, _scan_started_at, _scan_epoch
 
     with _scan_lock:
-        if _scan_running:
+        if _scan_running and not force:
             logger.info("Scan läuft bereits")
             return
+        if force:
+            _scan_epoch += 1  # laufenden Thread entkoppeln
+        my_epoch = _scan_epoch
         _scan_running = True  # innerhalb des Locks setzen — verhindert Race Condition
+        _scan_started_at = time.time()
 
     def _run():
+        global _scan_running, _scan_started_at
         try:
             from analyzer.scorer import run_full_scan
             logger.info("Hintergrund-Scan gestartet")
             result = run_full_scan()
+            # Nur committen, wenn dieser Scan noch der aktuelle ist (kein force-Restart dazwischen).
+            with _scan_lock:
+                superseded = my_epoch != _scan_epoch
+            if superseded:
+                logger.info("Scan-Ergebnis verworfen — durch Neustart ersetzt")
+                return
             save_cache(result)
             # Empfehlungen für Performance-Tracking historisieren
             try:
@@ -170,7 +224,12 @@ def trigger_scan_background(on_complete=None):
         except Exception as e:
             logger.error(f"Hintergrund-Scan fehlgeschlagen: {e}")
         finally:
-            _scan_running = False
+            # Status nur freigeben, wenn dieser Thread noch der aktuelle ist — ein
+            # zwischenzeitlicher force-Restart hat sonst schon einen neuen Scan gesetzt.
+            with _scan_lock:
+                if my_epoch == _scan_epoch:
+                    _scan_running = False
+                    _scan_started_at = None
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()

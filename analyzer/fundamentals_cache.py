@@ -98,7 +98,9 @@ def get_info_cached(ticker: str, ttl_days: int = _TTL_DAYS) -> dict:
             _save()
             return seed_entry.get("info", {})
 
-    # Fetch außerhalb des Locks — Netzwerk darf andere Threads nicht blockieren
+    # Fetch außerhalb des Locks — Netzwerk darf andere Threads nicht blockieren.
+    # yfinance begrenzt jeden Request intern auf 30 s (config.retries=0), daher kann
+    # .info zwar langsam sein, aber nicht unbegrenzt hängen.
     try:
         raw = yf.Ticker(ticker).info or {}
     except Exception as e:

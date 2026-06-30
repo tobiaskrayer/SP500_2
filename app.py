@@ -119,7 +119,20 @@ def render_sidebar_secondary():
             except Exception:
                 pass
             if scan_running:
-                st.info("Scan läuft...")
+                from scheduler import scan_runtime_seconds, scan_looks_stale
+                rt = scan_runtime_seconds()
+                mins = int(rt // 60) if rt else 0
+                if scan_looks_stale():
+                    st.warning(
+                        f"Scan läuft seit {mins} min — das dauert ungewöhnlich lange "
+                        "und hängt vermutlich. Starte ihn unten neu.",
+                        icon="⚠️",
+                    )
+                else:
+                    st.info(f"Scan läuft… (seit {mins} min)")
+                # Immer anklickbar — Notausstieg, falls sich der Scan verhakt hat.
+                if st.button("Scan abbrechen & neu starten", use_container_width=True):
+                    _force_restart_scan()
             else:
                 if st.button("Analyse neu starten", use_container_width=True, type="primary"):
                     _start_scan()
@@ -138,6 +151,14 @@ def _start_scan():
     from scheduler import trigger_scan_background
 
     trigger_scan_background()
+    st.rerun()
+
+
+def _force_restart_scan():
+    """Verhakten Scan abbrechen und komplett von vorne starten."""
+    from scheduler import trigger_scan_background
+
+    trigger_scan_background(force=True)
     st.rerun()
 
 

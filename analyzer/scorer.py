@@ -257,6 +257,7 @@ def _batch_download(tickers: list) -> dict:
     for batch_num, batch in enumerate(batches, 1):
         logger.info(f"Batch {batch_num}/{len(batches)}: {len(batch)} Ticker...")
         try:
+            from config import NETWORK
             raw = yf.download(
                 batch,
                 period="1y",
@@ -267,6 +268,9 @@ def _batch_download(tickers: list) -> dict:
                 # (Minuten beim ersten Tages-Scan). 8 parallele Requests sind
                 # weit unter Yahoos Rate-Limit, aber ~8x schneller.
                 threads=8,
+                # Explizites Request-Timeout — ein hängender Ticker darf den
+                # ganzen Batch (und damit den Scan-Thread) nicht blockieren.
+                timeout=NETWORK["request_timeout_sec"],
             )
             if raw is None or raw.empty:
                 logger.warning(f"Batch {batch_num}: leere Antwort")

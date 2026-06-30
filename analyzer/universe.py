@@ -12,8 +12,13 @@ warnt damit, wenn der Scan auf einem degradierten Universum lief.
 
 import json
 import os
+from io import StringIO
+
 import pandas as pd
+import requests
 import logging
+
+from config import NETWORK
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +50,15 @@ def _fetch_sp500_table() -> list[tuple[str, str]]:
     try:
         # User-Agent nötig — Wikipedia blockt Requests ohne ihn mit HTTP 403.
         # Ohne diesen Header fiele das Tool still auf die 100er-Fallback-Liste zurück.
-        tables = pd.read_html(
+        # Selbst per requests holen (statt read_html mit URL), damit ein hartes
+        # Timeout greift — sonst kann der Wikipedia-Abruf den Scan ewig blockieren.
+        resp = requests.get(
             SP500_WIKI_URL,
-            storage_options={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            timeout=NETWORK["request_timeout_sec"],
         )
+        resp.raise_for_status()
+        tables = pd.read_html(StringIO(resp.text))
         df = tables[0]
         result = []
         for _, row in df.iterrows():
