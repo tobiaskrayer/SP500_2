@@ -112,17 +112,21 @@ def render_sidebar_secondary():
         if on_cloud:
             st.caption("Aktualisierung täglich via GitHub Actions")
         else:
+            # Alle Scheduler-Funktionen in EINEM Import — schlägt er fehl (z. B. weil
+            # Streamlit Cloud nach einem Deploy ein veraltetes scheduler-Modul gecacht
+            # hat), degradiert die UI sauber auf den Start-Button statt zu crashen.
             scan_running = False
+            runtime_fn = stale_fn = None
             try:
-                from scheduler import is_scan_running
+                from scheduler import is_scan_running, scan_runtime_seconds, scan_looks_stale
                 scan_running = is_scan_running()
+                runtime_fn, stale_fn = scan_runtime_seconds, scan_looks_stale
             except Exception:
                 pass
             if scan_running:
-                from scheduler import scan_runtime_seconds, scan_looks_stale
-                rt = scan_runtime_seconds()
+                rt = runtime_fn() if runtime_fn else None
                 mins = int(rt // 60) if rt else 0
-                if scan_looks_stale():
+                if stale_fn and stale_fn():
                     st.warning(
                         f"Scan läuft seit {mins} min — das dauert ungewöhnlich lange "
                         "und hängt vermutlich. Starte ihn unten neu.",
