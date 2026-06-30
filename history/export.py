@@ -57,8 +57,23 @@ def generate_markdown_report(enriched_recs: list[dict]) -> str:
             f"- **Trefferquote 1M (positiv):** {stats['hit_rate']}%",
             f"- **Ø Performance 1M:** {stats['avg_perf_1m']:+.1f}%",
         ]
+        # Median + winsorisierter Ø: weichen sie stark vom rohen Ø ab, dominieren
+        # Extremwerte (z. B. ein Split-/Crash-Ereignis) die Kennzahl. Der Median ist
+        # die robustere Schätzung der typischen Empfehlung.
+        if stats.get("median_perf_1m") is not None:
+            lines.append(f"- **Median Performance 1M:** {stats['median_perf_1m']:+.1f}%")
+        if stats.get("avg_perf_1m_robust") is not None:
+            lines.append(f"- **Ø Performance 1M (winsorisiert):** {stats['avg_perf_1m_robust']:+.1f}%")
         if stats.get("avg_vs_spy_1m") is not None:
             lines.append(f"- **vs. SPY (Outperformance 1M):** {stats['avg_vs_spy_1m']:+.1f}%")
+        if stats.get("median_vs_spy_1m") is not None:
+            lines.append(f"- **vs. SPY (Median 1M):** {stats['median_vs_spy_1m']:+.1f}%")
+        if stats.get("n_split_rebased"):
+            lines.append(
+                f"- **⚠️ Split-/Adjustment-Fenster:** {stats['n_split_rebased']} auswertbare "
+                f"Einträge lagen in einem Split-/Dividendenfenster (Rendite split-konsistent "
+                f"gerechnet; Roh-Einstiegspreis weicht stark vom adjustierten Kurs ab)."
+            )
         if stats.get("best"):
             b = stats["best"]
             lines.append(f"- **Beste Empfehlung:** {b['ticker']} ({b['rec_date']}) → {b['performance_1m']:+.1f}%")
@@ -73,11 +88,12 @@ def generate_markdown_report(enriched_recs: list[dict]) -> str:
     # Konfidenz-Kalibrierung
     lines += ["## 2. Konfidenz-Kalibrierung", ""]
     if conf_data:
-        lines.append("| Label | n | Hit-Rate | Ø Perf 1M | vs SPY |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| Label | n | Hit-Rate | Ø Perf 1M | Median 1M | vs SPY |")
+        lines.append("|---|---|---|---|---|---|")
         for c in conf_data:
             vs = f"{c['avg_vs_spy']:+.1f}%" if c.get("avg_vs_spy") is not None else "N/A"
-            lines.append(f"| {c['label']} | {c['n']} | {c['hit_rate']}% | {c['avg_perf']:+.1f}% | {vs} |")
+            med = f"{c['median_perf']:+.1f}%" if c.get("median_perf") is not None else "N/A"
+            lines.append(f"| {c['label']} | {c['n']} | {c['hit_rate']}% | {c['avg_perf']:+.1f}% | {med} | {vs} |")
     else:
         lines.append("_Noch keine auswertbaren Daten._")
 
@@ -92,11 +108,12 @@ def generate_markdown_report(enriched_recs: list[dict]) -> str:
     lines.append("Validiert, ob das berechnete erwartete Upside (ATR + 52w-Hoch + Wachstum) mit der tatsächlichen Performance korreliert.")
     lines.append("")
     if upside_data:
-        lines.append("| Upside-Label | n | Hit-Rate | Ø Perf 1M | vs SPY |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| Upside-Label | n | Hit-Rate | Ø Perf 1M | Median 1M | vs SPY |")
+        lines.append("|---|---|---|---|---|---|")
         for u in upside_data:
             vs = f"{u['avg_vs_spy']:+.1f}%" if u.get("avg_vs_spy") is not None else "N/A"
-            lines.append(f"| {u['label']} | {u['n']} | {u['hit_rate']}% | {u['avg_perf']:+.1f}% | {vs} |")
+            med = f"{u['median_perf']:+.1f}%" if u.get("median_perf") is not None else "N/A"
+            lines.append(f"| {u['label']} | {u['n']} | {u['hit_rate']}% | {u['avg_perf']:+.1f}% | {med} | {vs} |")
     else:
         lines.append("_Noch keine auswertbaren Daten._")
     lines += [
@@ -152,10 +169,11 @@ def generate_markdown_report(enriched_recs: list[dict]) -> str:
     # Sektor-Performance
     lines += ["## 5. Performance je Sektor", ""]
     if sectors:
-        lines.append("| Sektor | n | Ø Perf 1M | Hit-Rate |")
-        lines.append("|---|---|---|---|")
+        lines.append("| Sektor | n | Ø Perf 1M | Median 1M | Hit-Rate |")
+        lines.append("|---|---|---|---|---|")
         for s in sectors:
-            lines.append(f"| {s['sector']} | {s['n']} | {s['avg_perf']:+.1f}% | {s['hit_rate']}% |")
+            med = f"{s['median_perf']:+.1f}%" if s.get("median_perf") is not None else "N/A"
+            lines.append(f"| {s['sector']} | {s['n']} | {s['avg_perf']:+.1f}% | {med} | {s['hit_rate']}% |")
     else:
         lines.append("_Noch keine auswertbaren Daten._")
 

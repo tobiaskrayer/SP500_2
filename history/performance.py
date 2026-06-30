@@ -54,9 +54,16 @@ def enrich_with_current_exits(flat: list[dict]) -> list[dict]:
             if hist is None or len(hist) < 15:
                 continue
 
-            exits = compute_exits(hist, entry_price=entry_price)
+            # Adjustierter Einstieg aus derselben (split-bereinigten) Serie statt des
+            # roh gespeicherten entry_price — sonst zeigen split-betroffene Titel
+            # Fake-Verluste und compute_exits' Stop-Loss läge auf falscher Skala
+            # (Low adjustiert vs. entry roh → fälschlich stop_hit=True). Siehe
+            # _compute_performance.
+            adj_entry = float(hist["Close"].iloc[0])
+
+            exits = compute_exits(hist, entry_price=adj_entry)
             current_price = float(hist["Close"].iloc[-1])
-            current_pnl_pct = round((current_price / entry_price - 1) * 100, 2)
+            current_pnl_pct = round((current_price / adj_entry - 1) * 100, 2)
 
             # Stop-Loss-Hit: war der Tages-Tiefstkurs jemals unter dem initialen Stop?
             sl = exits.get("stop_loss")
@@ -131,6 +138,23 @@ def _compute_performance(ticker: str, rec_date_str: str, entry_price: float) -> 
         if hist is None or len(hist) < 2:
             return {}
 
+        # Basis = adjustierter Close am Empfehlungstag aus DERSELBEN Serie, nicht der
+        # roh gespeicherte entry_price. yfinance liefert auto_adjust=True und bereinigt
+        # die Historie RÜCKWIRKEND bei Splits/Dividenden. Der im Log gespeicherte
+        # entry_price ist dagegen ein Punkt-in-Zeit-Rohpreis. Nach z. B. einem 10:1-Split
+        # (KLAC, Juni 2026) wären Zähler (adjustiert) und Nenner (roh) auf
+        # unterschiedlicher Basis → künstliche ~−90 %. Mit der adjustierten Basis sind
+        # Zähler und Nenner immer konsistent — analog zur bereits korrekten SPY-Logik.
+        adj_entry = float(hist["Close"].iloc[0])
+
+        # Split-/Adjustment-Marker: weicht der gespeicherte Rohpreis stark vom
+        # adjustierten Einstieg ab, lag zwischen Empfehlung und heute ein Split/große
+        # Dividende. Nur informativ — gerechnet wird ohnehin split-konsistent.
+        split_rebased = bool(
+            entry_price and adj_entry > 0
+            and abs(entry_price - adj_entry) / adj_entry > 0.5
+        )
+
         def perf_after(days: int):
             target = rec_date + timedelta(days=days)
             if target > today:
@@ -142,7 +166,7 @@ def _compute_performance(ticker: str, rec_date_str: str, entry_price: float) -> 
             if idx >= len(hist):
                 return None
             price = float(hist["Close"].iloc[idx])
-            return round((price / entry_price - 1) * 100, 2)
+            return round((price / adj_entry - 1) * 100, 2)
 
         def spy_perf_after(days: int):
             if len(spy_hist) < 2:
@@ -164,7 +188,8 @@ def _compute_performance(ticker: str, rec_date_str: str, entry_price: float) -> 
 
         perf_vs_spy = round(p1m - spy1m, 2) if (p1m is not None and spy1m is not None) else None
 
-        # Max-Drawdown seit Empfehlung (bis heute oder 3M)
+        # Max-Drawdown seit Empfehlung (bis heute oder 3M) — auf der adjustierten
+        # Serie ohnehin split-konsistent (peak und Kurs aus derselben Reihe).
         max_drawdown = None
         if len(hist) > 1:
             prices = hist["Close"]
@@ -184,6 +209,7 @@ def _compute_performance(ticker: str, rec_date_str: str, entry_price: float) -> 
             "hit_1m": bool(p1m is not None and p1m > 0),
             "max_drawdown": max_drawdown,
             "days_since": days_since,
+            "split_rebased": split_rebased,
         }
 
     except Exception as e:

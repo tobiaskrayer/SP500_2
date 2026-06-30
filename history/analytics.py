@@ -5,9 +5,14 @@ Alle Funktionen nehmen die flache Liste aus performance.enrich_with_performance(
 
 from collections import defaultdict
 
+# Winsorisierungs-Grenze für robuste Mittelwerte: die extremsten 2,5 % an jedem Rand
+# werden auf das Quantil geklemmt. So kann ein einzelnes Ereignis (Split-Artefakt,
+# Crash, Moonshot) den Ø nicht mehr kippen — der Median ist ohnehin extremwert-robust.
+WINSOR_LIMIT = 0.025
+
 
 def summary_stats(recs: list[dict]) -> dict:
-    """Gesamtüberblick: n, Trefferquote, Ø Performance."""
+    """Gesamtüberblick: n, Trefferquote, Ø/Median Performance, robuster Ø."""
     measurable = [r for r in recs if r.get("performance_1m") is not None]
     if not measurable:
         return {"total": len(recs), "measurable": 0}
@@ -19,7 +24,14 @@ def summary_stats(recs: list[dict]) -> dict:
         "measurable": len(measurable),
         "hit_rate": round(hits / len(measurable) * 100, 1),
         "avg_perf_1m": round(sum(perfs) / len(perfs), 2),
+        "avg_perf_1m_robust": _winsor_mean(perfs),
+        "median_perf_1m": _median(perfs),
         "avg_vs_spy_1m": round(sum(vs_spy) / len(vs_spy), 2) if vs_spy else None,
+        "median_vs_spy_1m": _median(vs_spy) if vs_spy else None,
+        # Wie viele auswertbare Einträge lagen in einem Split-/Adjustment-Fenster?
+        # (Rendite ist seit dem Fix korrekt, aber der Anteil gehört in den Report,
+        #  damit ein Einzelereignis nie wieder unbemerkt die Kennzahlen verschiebt.)
+        "n_split_rebased": sum(1 for r in measurable if r.get("split_rebased")),
         "best": max(measurable, key=lambda r: r["performance_1m"]),
         "worst": min(measurable, key=lambda r: r["performance_1m"]),
     }
@@ -46,6 +58,7 @@ def by_confidence(recs: list[dict]) -> list[dict]:
             "n": len(grp),
             "hit_rate": round(hits / len(grp) * 100, 1),
             "avg_perf": round(sum(perfs) / len(perfs), 2),
+            "median_perf": _median(perfs),
             "avg_vs_spy": round(sum(vs_spy) / len(vs_spy), 2) if vs_spy else None,
         })
     return result
@@ -106,6 +119,7 @@ def by_sector(recs: list[dict]) -> list[dict]:
             "sector": sector,
             "n": len(grp),
             "avg_perf": round(sum(perfs) / len(perfs), 2),
+            "median_perf": _median(perfs),
             "hit_rate": round(sum(1 for r in grp if r.get("hit_1m")) / len(grp) * 100, 1),
         })
     result.sort(key=lambda x: x["avg_perf"], reverse=True)
@@ -163,6 +177,7 @@ def by_upside_label(recs: list[dict]) -> list[dict]:
             "n": len(grp),
             "hit_rate": round(hits / len(grp) * 100, 1),
             "avg_perf": round(sum(perfs) / len(perfs), 2),
+            "median_perf": _median(perfs),
             "avg_vs_spy": round(sum(vs_spy) / len(vs_spy), 2) if vs_spy else None,
         })
     return result
@@ -183,6 +198,30 @@ def best_recommendations(recs: list[dict], n: int = 10) -> list[dict]:
 def _avg_perf(recs: list[dict]):
     perfs = [r["performance_1m"] for r in recs if r.get("performance_1m") is not None]
     return round(sum(perfs) / len(perfs), 2) if perfs else None
+
+
+def _median(values):
+    """Extremwert-robuster Median; None bei leerer Eingabe."""
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    med = vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
+    return round(med, 2)
+
+
+def _winsor_mean(values, limit: float = WINSOR_LIMIT):
+    """Mittelwert nach Winsorisierung: die extremsten `limit` an jedem Rand werden
+    auf das jeweilige Quantil geklemmt. Unter 5 Werten = normaler Mittelwert (zu
+    wenig Daten, um Extremwerte sinnvoll zu klemmen)."""
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return None
+    if len(vals) >= 5:
+        lo = vals[int(limit * (len(vals) - 1))]
+        hi = vals[int((1 - limit) * (len(vals) - 1))]
+        vals = [min(max(v, lo), hi) for v in vals]
+    return round(sum(vals) / len(vals), 2)
 
 
 def _hit_rate(recs: list[dict]):

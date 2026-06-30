@@ -46,5 +46,9 @@ cache/backtest/
 # Atomische Schreibvorgänge hinterlassen bei Fehler eine .tmp-Datei — nie committen
 history/*.tmp
 
+# Performance-Cache ist ein reiner Laufzeit-Cache (wird aus Log + yfinance neu
+# aufgebaut) — wie cache/prices/ nicht versionieren.
+history/performance_cache.json
+
 # Hinweis: cache/*.json wird NICHT ignoriert —
 # GitHub Actions committed die Analyseergebnisse täglich ins Repo.
