@@ -1,0 +1,31 @@
+name: Supabase Keep-Alive
+
+# Verhindert die Free-Tier-Pausierung: Supabase pausiert Projekte nach
+# ~7 Tagen ohne API-Aktivität. Ein winziger REST-Request 2x pro Woche reicht.
+# Bewusst getrennt vom Analyse-Workflow, damit der Ping auch läuft,
+# wenn die Analyse fehlschlägt.
+
+on:
+  schedule:
+    # Montag + Donnerstag 06:00 UTC → max. Lücke 3-4 Tage (< 7-Tage-Schwelle)
+    - cron: '0 6 * * 1,4'
+  workflow_dispatch:
+    # Manueller Start über GitHub UI jederzeit möglich
+
+jobs:
+  ping:
+    name: Supabase anpingen
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: REST-Request an PostgREST senden
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        # RLS blockt anon → Antwort ist nur "[]", zählt aber als Aktivität.
+        # -f lässt den Step bei HTTP-Fehler fehlschlagen (roter Workflow
+        # = Projekt wurde evtl. doch pausiert).
+        run: |
+          curl -fsS "$SUPABASE_URL/rest/v1/lots?select=id&limit=1" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY"
