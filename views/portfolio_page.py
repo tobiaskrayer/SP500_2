@@ -1,4 +1,4 @@
-"""Seite: Mein Portfolio (Supabase-Lots, Bewertung, History)."""
+"""Seite: Mein Portfolio (Lots aus data/portfolio.json, Bewertung, History)."""
 
 import streamlit as st
 import pandas as pd

@@ -26,8 +26,10 @@ Thumbs.db
 # Streamlit
 .streamlit/secrets.toml
 
-# Portfolio-Daten (jetzt in Supabase — nicht mehr im Repo)
-portfolio.json
+# Alte Portfolio-Datei aus der Supabase-Zeit (nur Root-Ebene) — nicht mehr genutzt.
+# Führender Slash: matcht NUR /portfolio.json, nicht data/portfolio.json.
+# Die aktuellen Portfolio-Daten liegen jetzt versioniert in data/portfolio.json.
+/portfolio.json
 
 # Kurs-Cache (Laufzeit-Cache, soll das Repo nicht aufblähen)
 cache/prices/

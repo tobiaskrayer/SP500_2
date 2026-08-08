@@ -203,17 +203,6 @@ def main():
     if not render_auth_gate():
         return
 
-    # Einmalige Migration aus portfolio.json falls noch vorhanden
-    if not st.session_state.get("migration_checked"):
-        st.session_state.migration_checked = True
-        try:
-            from portfolio.manager import auto_migrate_from_json
-            msg = auto_migrate_from_json()
-            if msg:
-                st.success(f"✅ {msg}", icon="📦")
-        except Exception:
-            pass
-
     render_sidebar_secondary()
     page = render_top_nav()
     result = st.session_state.scan_result
