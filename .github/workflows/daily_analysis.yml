@@ -16,13 +16,17 @@ jobs:
       contents: write   # Erlaubt git push zurück ins Repo
 
     steps:
+      # checkout@v5 / setup-python@v6 sind die ersten Versionen auf Node 24.
+      # Bewusst nicht v7: dieser Job pusht mit den von checkout hinterlegten
+      # Credentials, und v6 hat genau deren Ablage geändert ("persist creds to a
+      # separate file"). v5.0.0 enthält ausschließlich den Node-Bump.
       - name: Repository auschecken
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Python 3.11 einrichten
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
