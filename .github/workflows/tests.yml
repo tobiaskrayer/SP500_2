@@ -24,7 +24,7 @@ jobs:
           cache: 'pip'
 
       - name: Abhängigkeiten installieren
-        run: pip install -r requirements.txt pytest
+        run: pip install -r requirements-dev.txt
 
       - name: Tests ausführen
         run: pytest tests/ -q

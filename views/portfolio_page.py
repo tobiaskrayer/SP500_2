@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 
-from views.common import _render_exit_signals
+from views.common import _render_exit_signals, cached_market
 
 
 def page_portfolio():
@@ -16,11 +16,14 @@ def page_portfolio():
         add_position, remove_position, evaluate_positions,
         sell_position, load_realized, edit_lot, delete_lot, edit_realized,
     )
-    from portfolio.auth import current_user_id
 
-    # Positionen auswerten
+    # Positionen auswerten. Marktumfeld kommt gecacht von außen — sonst zwei
+    # yfinance-Calls bei jedem Rerun (also bei jedem Klick auf dieser Seite).
     with st.spinner("Lade aktuelle Kurse und EUR/USD-Kurs..."):
-        positions = evaluate_positions()
+        mkt = cached_market()
+        positions = evaluate_positions(
+            market_bearish=not mkt.get("passed", True) or mkt.get("warning", False)
+        )
 
     realized = load_realized()
 
@@ -372,8 +375,7 @@ def page_portfolio():
                 from portfolio.history import get_portfolio_history
                 # realized mitgeben: verkaufte Stücke zählen in der Vergangenheit mit,
                 # sonst wäre die History nach jedem Verkauf rückwirkend falsch.
-                hist_data = get_portfolio_history(positions, realized=realized,
-                                                  user_id=current_user_id())
+                hist_data = get_portfolio_history(positions, realized=realized)
 
             if not hist_data:
                 st.info("Nicht genug Kursdaten (mindestens 3 Tage Haltedauer nötig).")

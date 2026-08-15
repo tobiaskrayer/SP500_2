@@ -2,7 +2,7 @@
 
 Streamlit-App, die täglich alle ~503 S&P500-Titel durch ein 4-stufiges
 Gate-System schickt und Kaufkandidaten für eine Haltedauer von 1–8 Wochen
-priorisiert. Mit Portfolio-Tracking (Supabase, mehrbenutzerfähig),
+priorisiert. Mit Portfolio-Tracking (Ein-Nutzer, Passwort-Gate, Git/JSON-Storage),
 Performance-Nachverfolgung und einem 10-Jahres-Backtest, der die eigene
 Empfehlungslogik validiert.
 
@@ -32,29 +32,44 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Für Portfolio/Login wird ein Supabase-Projekt benötigt — Credentials in
-`.streamlit/secrets.toml`:
+Lokal läuft die App ohne jede Konfiguration. Das Portfolio liegt versioniert in
+[data/portfolio.json](data/portfolio.json) und wird direkt als Datei geschrieben;
+Committen/Pushen macht man wie gewohnt selbst.
+
+Optional in `.streamlit/secrets.toml` (gitignored):
 
 ```toml
-SUPABASE_URL = "https://<projekt>.supabase.co"
-SUPABASE_ANON_KEY = "<anon-key>"
+# Passwort-Gate. Nicht gesetzt = App offen (praktisch lokal).
+PORTFOLIO_PASSWORD = "<passwort>"
+
+# Nur für das Deployment auf Streamlit Cloud: dort kann git zur Laufzeit nicht
+# schreiben, deshalb committet die App data/portfolio.json über die GitHub
+# Contents-API. Siehe portfolio/github_store.py.
+GITHUB_TOKEN  = "<fine-grained PAT mit contents:write>"
+GITHUB_REPO   = "tobiaskrayer/SP500_2"   # Default
+GITHUB_BRANCH = "main"                    # Default
 ```
 
-Erwartete Tabellen: `lots` (offene Kauf-Lots) und `realized_trades`
-(abgeschlossene Trades), jeweils mit `user_id`-Spalte.
-**Wichtig bei mehreren Nutzern:** Auf beiden Tabellen Row-Level-Security
-aktivieren — die App filtert zwar klientseitig, aber nur RLS erzwingt die
-Isolation serverseitig. Fertiges, idempotentes SQL:
-[scripts/supabase_rls.sql](scripts/supabase_rls.sql) (im Supabase
-SQL-Editor ausführen); Schnell-Check: `python scripts/check_rls.py`.
+Tests brauchen zusätzlich `pip install -r requirements-dev.txt`.
 
 ## Betrieb / Datenflüsse
 
 - **GitHub Actions** ([daily_analysis.yml](.github/workflows/daily_analysis.yml))
-  scannt werktags um 21:30 UTC und committed die Ergebnisse ins Repo
-  (`cache/results_<datum>.json`, History-Logs, Fundamentals-Seed). Die
+  scannt werktags um 21:30 UTC und committed die Ergebnisse ins Repo. Die
   deployte App (Streamlit Cloud) zieht den Commit und zeigt die Daten ohne
   eigenen Scan.
+- **Was der tägliche Job committet** — bewusst kurz gehalten, denn jede Datei
+  landet für immer in der Git-Historie:
+
+  | Datei | Größe | Zweck |
+  |---|---|---|
+  | `cache/results_latest.json` | ~1,1 MB | Der letzte Scan. **Fester Dateiname**, kein Datum: der Job läuft nur Mo–Fr, ein datierter Name ließe die App am Wochenende leer aussehen. |
+  | `history/log/<YYYY-MM>.json` | ≤ 0,8 MB | Empfehlungs-Log, monatlich geschnitten. Abgeschlossene Monate ändern sich nie wieder → genau ein Blob pro Monat. |
+  | `cache/fundamentals_seed.json` | ~67 KB | Wärmt den `Ticker.info`-Cache nach jedem Deploy vor. |
+  | `cache/sp500_universe.json` | ~14 KB | Letzte gute Tickerliste (Wikipedia-Fallback). |
+
+  Der Job addiert diese Pfade **explizit** (kein `git add cache/`), damit keine
+  Laufzeit-Artefakte hineinrutschen.
 - **Caches** (alle regenerierbar): Kurs-Tages-Cache (`cache/prices/`,
   gitignored), Fundamentals-Cache mit 3-Tage-TTL (`cache/fundamentals.json`,
   gitignored; git-getrackter Seed wärmt ihn nach Deploys vor),
@@ -89,14 +104,16 @@ mit Netzwerk liegen in `scripts/test_*.py`.
 ## Projektstruktur
 
 ```
-app.py                  Streamlit-UI (Seiten, Charts, Navigation)
+app.py                  Streamlit-Shell (Navigation, Seiten-Dispatch)
+views/                  Eine Datei pro Seite (Charts, Tabellen, Formulare)
 config.py               Alle Schwellenwerte & Parameter, zentral dokumentiert
+storage.py              Atomares JSON-Schreiben (tmp + os.replace)
 scheduler.py            Tages-Cache, Hintergrund-Scan, Serialisierung
 run_analysis.py         Headless-Scan für GitHub Actions
 analyzer/               Gates 1-4, Scorer, Indikatoren, Caches, Universum
 backtest/               Runner, A/B-Vergleich, Stop-Simulation, FINDINGS.md
-portfolio/              Supabase-Auth, Lots/Trades, Portfolio-History
-history/                Empfehlungs-Log + Performance-Nachverfolgung
+portfolio/              Passwort-Gate, Lots/Trades, GitHub-Storage, History
+history/                Empfehlungs-Log (log/) + Performance-Nachverfolgung
 tests/                  pytest-Regressionssuite (netzwerkfrei)
 scripts/                Experimente, Migrations- und Smoke-Test-Skripte
 ```

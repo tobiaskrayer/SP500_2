@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import sys
-import tempfile
 from datetime import date, datetime, timedelta
 import yfinance as yf
 
@@ -21,6 +20,8 @@ try:
     _CACHE_AVAILABLE = True
 except ImportError:
     _CACHE_AVAILABLE = False
+
+from storage import write_json_atomic
 
 PERF_CACHE_FILE = os.path.join(os.path.dirname(__file__), "performance_cache.json")
 
@@ -93,6 +94,7 @@ def enrich_with_performance(log: list[dict], key: str = "recommendations") -> li
          Der Performance-Cache wird geteilt (Ticker+Datum identisch) — kein Konflikt.
     """
     cache = _load_cache()
+    dirty = False
 
     flat = []
     for entry in log:
@@ -111,6 +113,7 @@ def enrich_with_performance(log: list[dict], key: str = "recommendations") -> li
                 perf_data = _compute_performance(ticker, rec_date, entry_price)
                 if perf_data:
                     cache[cache_key] = perf_data
+                    dirty = True
 
             flat.append({
                 **rec,
@@ -119,7 +122,11 @@ def enrich_with_performance(log: list[dict], key: str = "recommendations") -> li
                 **(perf_data or {}),
             })
 
-    _save_cache(cache)
+    # Nur schreiben, wenn wirklich etwas dazukam. Ein vollständig warmer Cache
+    # schrieb sonst bei jedem Seitenaufruf ~320 KB — zweimal, weil die Seite v1
+    # und v2 getrennt anreichert.
+    if dirty:
+        _save_cache(cache)
     return flat
 
 
@@ -242,24 +249,13 @@ def _load_cache() -> dict:
 
 
 def _save_cache(cache: dict):
-    # Atomischer Schreibvorgang: erst temp-Datei, dann umbenennen.
-    # Verhindert korrupte Lesungen wenn die Performance-Seite gleichzeitig lädt.
-    tmp_path = None
+    # Atomisch (tmp + os.replace): verhindert korrupte Lesungen, wenn die
+    # Performance-Seite gleichzeitig lädt. Kompakt — die Datei ist gitignored
+    # und wird nie von Hand gelesen.
     try:
-        dir_ = os.path.dirname(PERF_CACHE_FILE)
-        os.makedirs(dir_, exist_ok=True)
-        with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp",
-                                         delete=False, encoding="utf-8") as tmp:
-            json.dump(cache, tmp, indent=2, ensure_ascii=False)
-            tmp_path = tmp.name
-        os.replace(tmp_path, PERF_CACHE_FILE)
+        write_json_atomic(PERF_CACHE_FILE, cache)
     except Exception as e:
         logger.warning(f"Performance-Cache konnte nicht gespeichert werden: {e}")
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
 
 def _load_hist_for_perf(ticker: str, start_str: str, end_date) -> object:

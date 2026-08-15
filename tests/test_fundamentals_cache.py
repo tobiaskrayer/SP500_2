@@ -1,5 +1,6 @@
-"""Fundamentals-Cache: TTL, Seed-Fallback, Export-Merge — komplett offline."""
+"""Fundamentals-Cache: TTL, Seed-Fallback, Schreib-Drosselung, Export-Merge — offline."""
 import json
+import os
 import time
 
 import pytest
@@ -17,6 +18,11 @@ def cache_env(tmp_path, monkeypatch):
     monkeypatch.setattr(fc, "_SEED_FILE", seed_file)
     monkeypatch.setattr(fc, "_cache", None)
     monkeypatch.setattr(fc, "_seed", None)
+    # Schreib-Drosselung zuruecksetzen: sonst haengt das Verhalten davon ab, wie
+    # lange der letzte Test her ist (und der atexit-Flush wuerde Testdaten in den
+    # echten Cache schreiben).
+    monkeypatch.setattr(fc, "_dirty", False)
+    monkeypatch.setattr(fc, "_last_save", 0.0)
     # export-Modul bindet die Pfade beim Import -> dort ebenfalls patchen
     monkeypatch.setattr(exp, "_CACHE_FILE", cache_file)
     monkeypatch.setattr(exp, "_SEED_FILE", seed_file)
@@ -70,6 +76,52 @@ def test_stale_seed_entry_ignored(cache_env):
     info = fc.get_info_cached("CCC")
     assert info["longName"] == "CCC Corp"   # frisch gefetcht, nicht der Seed
     assert cache_env["fetches"] == ["CCC"]
+
+
+def test_many_lookups_write_file_at_most_once(cache_env, monkeypatch):
+    """
+    Frueher schrieb JEDER gecachte Ticker die komplette Datei neu — 50-150
+    Rewrites pro Scan, jeweils im Lock. Jetzt drosselt _mark_dirty.
+    """
+    writes = []
+    real_save = fc._save
+    monkeypatch.setattr(fc, "_save", lambda: (writes.append(1), real_save())[1])
+
+    for i in range(20):
+        fc.get_info_cached(f"T{i}")
+
+    assert len(cache_env["fetches"]) == 20, "alle 20 muessen gefetcht werden"
+    assert len(writes) <= 1, f"{len(writes)} Schreibvorgaenge statt hoechstens 1"
+
+
+def test_flush_writes_pending_changes(cache_env):
+    fc._last_save = time.time()     # Drossel aktiv -> _mark_dirty schreibt nicht
+    fc.get_info_cached("AAA")
+    assert not os.path.exists(cache_env["cache"]), "Drossel hat nicht gegriffen"
+
+    fc.flush()
+
+    with open(cache_env["cache"], encoding="utf-8") as f:
+        assert "AAA" in json.load(f)
+
+
+def test_flush_on_clean_cache_writes_nothing(cache_env, monkeypatch):
+    writes = []
+    monkeypatch.setattr(fc, "_save", lambda: writes.append(1))
+
+    fc.flush()
+
+    assert writes == []
+
+
+def test_corrupt_cache_file_does_not_break_lookup(cache_env):
+    """Eine kaputte Datei (z. B. "null") darf _load() nicht vergiften."""
+    with open(cache_env["cache"], "w", encoding="utf-8") as f:
+        f.write("null")
+    fc._cache = None
+
+    info = fc.get_info_cached("AAA")
+    assert info["longName"] == "AAA Corp"
 
 
 def test_export_merges_runtime_over_seed_and_prunes(cache_env):

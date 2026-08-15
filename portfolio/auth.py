@@ -10,14 +10,6 @@ import hmac
 import streamlit as st
 
 
-def current_user_id() -> str | None:
-    """
-    Kompatibilitäts-Stub aus der Supabase-Zeit. Das Ein-Nutzer-Setup kennt keine
-    user_id mehr; Aufrufer (z. B. history.py als Cache-Suffix) kommen mit None klar.
-    """
-    return None
-
-
 def _configured_password() -> str | None:
     try:
         pw = st.secrets["PORTFOLIO_PASSWORD"]

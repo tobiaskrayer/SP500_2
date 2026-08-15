@@ -1,13 +1,26 @@
 """
 Historisierung der täglichen Scan-Empfehlungen.
-Hängt bei jedem Scan einen Eintrag an history/recommendations_log.json an.
+
+Speicherung in Monats-Shards: history/log/<YYYY-MM>.json.
+
+Warum geschnitten: Vorher lag alles in einer einzigen Datei, die bei jedem Scan
+komplett neu geschrieben und von GitHub Actions committet wurde. Bei ~46 KB pro
+Tag wäre sie nach einem Jahr ~13 MB groß gewesen — und jeder Tages-Commit hätte
+diese 13 MB erneut in die Historie gelegt. Mit Monats-Shards wird nur der
+laufende Monat angefasst (≤ 0,8 MB); abgeschlossene Monate ändern sich nie wieder
+und liegen genau einmal im Objektspeicher.
+
+load_log() liest zusätzlich eine noch vorhandene Alt-Datei
+(history/recommendations_log.json) mit, damit nicht migrierte Checkouts weiterlaufen.
 """
 
+import glob
 import json
 import os
-import tempfile
 import time
 from datetime import date, datetime
+
+from storage import write_json_atomic
 
 
 def _json_default(obj):
@@ -24,7 +37,36 @@ def _json_default(obj):
         pass
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
-LOG_FILE = os.path.join(os.path.dirname(__file__), "recommendations_log.json")
+SHARD_DIR = os.path.join(os.path.dirname(__file__), "log")
+# Monolith aus der Zeit vor dem Sharding — wird nur noch gelesen.
+LEGACY_LOG_FILE = os.path.join(os.path.dirname(__file__), "recommendations_log.json")
+
+
+def _shard_path(date_str: str) -> str:
+    """history/log/<YYYY-MM>.json für ein Datum im Format YYYY-MM-DD."""
+    return os.path.join(SHARD_DIR, f"{date_str[:7]}.json")
+
+
+def _shard_files() -> list[str]:
+    return sorted(glob.glob(os.path.join(SHARD_DIR, "*.json")))
+
+
+def log_fingerprint() -> tuple:
+    """
+    Billiger Fingerabdruck aller Log-Dateien ((Name, mtime, Größe), ...).
+
+    Die Performance-Seite nutzt ihn als @st.cache_data-Key: ein frischer Scan
+    ändert den Fingerabdruck und invalidiert den Cache sofort, statt bis zum
+    TTL-Ablauf veraltete Zahlen zu zeigen.
+    """
+    out = []
+    for path in _shard_files() + [LEGACY_LOG_FILE]:
+        try:
+            st = os.stat(path)
+            out.append((os.path.basename(path), st.st_mtime_ns, st.st_size))
+        except OSError:
+            pass
+    return tuple(out)
 
 
 def append_scan_result(result: dict):
@@ -61,29 +103,16 @@ def append_scan_result(result: dict):
         ],
     }
 
-    log = _load_log()
-    log = [e for e in log if e.get("date") != today]
-    log.append(entry)
-    log.sort(key=lambda e: e["date"])
+    # Nur den Shard des betroffenen Monats laden und neu schreiben.
+    path = _shard_path(today)
+    shard = [e for e in _load_shard(path) if e.get("date") != today]
+    shard.append(entry)
+    shard.sort(key=lambda e: e["date"])
 
-    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-    # Atomischer Schreibvorgang: erst temp-Datei, dann umbenennen.
-    # Verhindert Race Condition wenn Streamlit gleichzeitig load_log() aufruft.
-    dir_ = os.path.dirname(LOG_FILE)
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile("w", dir=dir_, suffix=".tmp",
-                                         delete=False, encoding="utf-8") as tmp:
-            json.dump(log, tmp, indent=2, ensure_ascii=False, default=_json_default)
-            tmp_path = tmp.name
-        os.replace(tmp_path, LOG_FILE)
-    except Exception:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-        raise
+    # Atomisch (tmp + os.replace): verhindert eine Race Condition, wenn Streamlit
+    # gleichzeitig load_log() aufruft. Kompakt statt indent=2 — die Datei wird
+    # täglich committet, Einrückung kostet ~38 % der Bytes ohne Gegenwert.
+    write_json_atomic(path, shard, default=_json_default)
 
 
 def _extract_recommendation(r: dict) -> dict:
@@ -156,16 +185,31 @@ def _extract_v2_recommendation(r: dict) -> dict:
 
 
 def load_log() -> list[dict]:
-    """Gibt alle Log-Einträge zurück (älteste zuerst)."""
-    return _load_log()
+    """
+    Gibt alle Log-Einträge zurück (älteste zuerst).
+
+    Mergt die Monats-Shards mit einer eventuell noch vorhandenen Alt-Datei.
+    Bei doppeltem Datum gewinnt der Shard — dadurch ist die Migration in beide
+    Richtungen gefahrlos und ein nicht migrierter Checkout läuft normal weiter.
+    """
+    by_date: dict[str, dict] = {}
+    for entry in _load_shard(LEGACY_LOG_FILE):
+        if entry.get("date"):
+            by_date[entry["date"]] = entry
+    for path in _shard_files():
+        for entry in _load_shard(path):
+            if entry.get("date"):
+                by_date[entry["date"]] = entry
+    return [by_date[d] for d in sorted(by_date)]
 
 
-def _load_log() -> list[dict]:
-    if not os.path.exists(LOG_FILE):
+def _load_shard(path: str) -> list[dict]:
+    """Liest eine Log-Datei. Leere Liste, wenn sie fehlt oder unlesbar ist."""
+    if not os.path.exists(path):
         return []
     for attempt in range(3):
         try:
-            with open(LOG_FILE, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return data if isinstance(data, list) else []
         except (json.JSONDecodeError, ValueError):

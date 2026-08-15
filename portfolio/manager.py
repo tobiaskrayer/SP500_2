@@ -84,10 +84,18 @@ def add_position(ticker: str, company_name: str, entry_date: str,
 
     pos = _find_position(data, ticker)
     if pos is None:
+        # Sektor hier ermitteln statt beim Anzeigen: das ist ein echter
+        # Mutationspunkt, der ohnehin speichert (evaluate_positions ist lesend).
+        sector = None
+        try:
+            from analyzer.fundamentals_cache import get_info_cached
+            sector = get_info_cached(ticker).get("sector")
+        except Exception:
+            pass
         pos = {
             "ticker": ticker,
             "company_name": company_name or ticker,
-            "sector": None,
+            "sector": sector,
             "lots": [],
         }
         data.setdefault("positions", []).append(pos)
@@ -359,28 +367,32 @@ def get_eurusd_rate() -> float | None:
     return None
 
 
-def evaluate_positions() -> list[dict]:
+def evaluate_positions(market_bearish: bool | None = None) -> list[dict]:
     """
     Lädt alle offenen Lots, gruppiert nach Ticker, berechnet P&L und Exit-Signale.
-    Output-Schema identisch zur früheren Version, damit app.py, views und
-    history.py unverändert bleiben.
+
+    NUR LESEND — diese Funktion darf das Portfolio nicht schreiben. Auf Streamlit
+    Cloud geht jeder Schreibvorgang als echter Commit über die GitHub-API; früher
+    löste hier das Nachtragen gefundener Sektoren einen Commit aus, nur weil
+    jemand die Seite ansah (und zwei offene Tabs einen ConflictError).
+
+    market_bearish: vorberechnetes Marktumfeld (views/common.cached_market()).
+                    None → wird selbst ermittelt (für Skripte/Notebooks).
     """
-    data, sha = _load()
+    data, _sha = _load()
     eurusd = get_eurusd_rate()
 
-    # Marktumfeld einmalig abrufen
-    market_bearish = False
-    try:
-        from analyzer.market_filter import check_market
-        mkt = check_market()
-        market_bearish = not mkt.get("passed", True) or mkt.get("warning", False)
-    except Exception:
-        pass
+    if market_bearish is None:
+        try:
+            from analyzer.market_filter import check_market
+            mkt = check_market()
+            market_bearish = not mkt.get("passed", True) or mkt.get("warning", False)
+        except Exception:
+            market_bearish = False
 
     positions = data.get("positions", [])
     hist_batch = _batch_history([p["ticker"] for p in positions if p.get("lots")])
 
-    sector_updated = False
     results = []
     for pos in positions:
         ticker = pos["ticker"]
@@ -419,11 +431,13 @@ def evaluate_positions() -> list[dict]:
                         if exits.get(key) is not None:
                             exits[key] = round(exits[key] / eurusd, 2)
             if not sector:
+                # Nur für die Anzeige — NICHT nach pos["sector"] zurückschreiben
+                # (siehe Docstring). Persistiert wird der Sektor in add_position().
+                # get_info_cached statt yf.Ticker().info: 3-Tage-TTL statt eines
+                # 1-2 s teuren Calls pro Position bei jedem Seitenaufruf.
                 try:
-                    sector = yf.Ticker(ticker).info.get("sector")
-                    if sector:
-                        pos["sector"] = sector  # im Portfolio cachen
-                        sector_updated = True
+                    from analyzer.fundamentals_cache import get_info_cached
+                    sector = get_info_cached(ticker).get("sector")
                 except Exception:
                     pass
         except Exception:
@@ -465,12 +479,5 @@ def evaluate_positions() -> list[dict]:
             "exits": exits,
             "notes": lots_compat[-1].get("notes", "") if lots_compat else "",
         })
-
-    # Neu ermittelte Sektoren einmalig zurückschreiben (best effort)
-    if sector_updated:
-        try:
-            _save(data, sha, "Portfolio: Sektoren aktualisiert")
-        except Exception:
-            pass
 
     return results

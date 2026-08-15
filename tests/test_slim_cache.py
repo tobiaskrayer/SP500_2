@@ -3,7 +3,8 @@ import json
 
 import pandas as pd
 
-from scheduler import _slim_for_cache, _make_serializable
+import scheduler
+from scheduler import _slim_for_cache, _make_serializable, _SERIES_DECIMALS
 
 
 def _fake_result():
@@ -37,7 +38,7 @@ def test_slimming_shrinks_and_keeps_chart_data():
     # hist: nur noch Close, als Liste gerundeter Werte
     assert list(rec["hist"].keys()) == ["Close"]
     assert isinstance(rec["hist"]["Close"], list) and len(rec["hist"]["Close"]) == 250
-    assert rec["hist"]["Close"][0] == round(100.123456789, 4)
+    assert rec["hist"]["Close"][0] == round(100.123456789, _SERIES_DECIMALS)
 
     ind = rec["tech"]["indicators"]
     assert "close" not in ind and "bb_ma" not in ind
@@ -46,6 +47,31 @@ def test_slimming_shrinks_and_keeps_chart_data():
         assert isinstance(ind[key], list) and len(ind[key]) == 250
     # Skalare bleiben
     assert ind["rsi_value"] == 55.3 and ind["price"] == 349.12
+
+
+def test_all_chart_series_have_equal_length(monkeypatch):
+    """
+    Kurs- und Indikator-Serien muessen immer gleich lang sein.
+
+    views/recommendations.py plottet positionsbasiert (go.Scatter(y=...) ohne x)
+    in ein make_subplots(shared_xaxes=True) — unterschiedlich lange Serien
+    verschieben die Subplots sichtbar gegeneinander. Der Test prueft auch den
+    gekuerzten Fall, damit ein spaeteres Aktivieren von _SERIES_MAX_POINTS nicht
+    versehentlich nur die Haelfte der Serien trifft.
+    """
+    for max_points in (None, 60):
+        monkeypatch.setattr(scheduler, "_SERIES_MAX_POINTS", max_points)
+        data = _make_serializable(_fake_result())
+        _slim_for_cache(data)
+
+        rec = data["recommendations"][0]
+        lengths = {"hist.Close": len(rec["hist"]["Close"])}
+        for key in ("ma50", "ma200", "rsi", "macd_line", "signal_line",
+                    "histogram", "bb_upper", "bb_lower"):
+            lengths[key] = len(rec["tech"]["indicators"][key])
+
+        assert len(set(lengths.values())) == 1, f"ungleiche Serienlaengen: {lengths}"
+        assert set(lengths.values()) == {max_points or 250}
 
 
 def test_market_chart_keys_untouched():

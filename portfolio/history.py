@@ -10,17 +10,18 @@ from datetime import date, datetime, timedelta
 import yfinance as yf
 import pandas as pd
 
+from storage import write_json_atomic
+
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache")
-_CACHE_VERSION = "v3"  # erhöhen wenn Berechnungslogik sich ändert → Cache-Invalidierung
+# Erhöhen wenn die Berechnungslogik sich ändert → Cache-Invalidierung.
+# v4: user_id-Suffix aus der Supabase-Zeit entfernt (Ein-Nutzer-Setup) — der Bump
+# sorgt dafür, dass alte "portfolio_history_<uid>.json" nicht weiterverwendet werden.
+_CACHE_VERSION = "v4"
+
+_CACHE_FILE = os.path.join(_CACHE_DIR, "portfolio_history.json")
 
 
-def _cache_file(user_id: str | None = None) -> str:
-    suffix = f"_{user_id}" if user_id else ""
-    return os.path.join(_CACHE_DIR, f"portfolio_history{suffix}.json")
-
-
-def get_portfolio_history(positions: list[dict], realized: list[dict] | None = None,
-                          user_id: str | None = None) -> dict | None:
+def get_portfolio_history(positions: list[dict], realized: list[dict] | None = None) -> dict | None:
     """
     Berechnet die tägliche Portfolio-Wertentwicklung ab dem ersten Kauf.
 
@@ -64,7 +65,7 @@ def get_portfolio_history(positions: list[dict], realized: list[dict] | None = N
     # Cache prüfen — Fingerprint enthält auch die realisierten Trades
     n_lots = sum(len(ivs) for ivs in holdings.values())
     cache_key = f"{_CACHE_VERSION}_{start_str}_{','.join(sorted(holdings))}_{n_lots}_{len(realized or [])}"
-    cached = _load_cache(user_id)
+    cached = _load_cache()
     if cached and cached.get("cache_key") == cache_key and cached.get("end_date") == today.isoformat():
         return cached.get("result")
 
@@ -184,7 +185,7 @@ def get_portfolio_history(positions: list[dict], realized: list[dict] | None = N
             "max_drawdown_pct": max_dd,
         }
 
-        _save_cache({"cache_key": cache_key, "end_date": today.isoformat(), "result": result}, user_id)
+        _save_cache({"cache_key": cache_key, "end_date": today.isoformat(), "result": result})
         return result
 
     except Exception:
@@ -239,22 +240,19 @@ def _max_drawdown(indexed: list[float]) -> float:
     return round(max_dd, 2)
 
 
-def _load_cache(user_id: str | None = None) -> dict | None:
+def _load_cache() -> dict | None:
     try:
-        path = _cache_file(user_id)
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+        if os.path.exists(_CACHE_FILE):
+            with open(_CACHE_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
     except Exception:
         pass
     return None
 
 
-def _save_cache(data: dict, user_id: str | None = None):
+def _save_cache(data: dict):
     try:
-        path = _cache_file(user_id)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
+        os.makedirs(os.path.dirname(_CACHE_FILE), exist_ok=True)
+        write_json_atomic(_CACHE_FILE, data)
     except Exception:
         pass

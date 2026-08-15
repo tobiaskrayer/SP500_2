@@ -1,0 +1,7 @@
+# Entwicklungs-/CI-Abhängigkeiten.
+# BEWUSST getrennt von requirements.txt: die wird bei jedem Actions-Lauf UND bei
+# jedem Streamlit-Cloud-Deploy installiert — pytest gehört da nicht hinein.
+-r requirements.txt
+
+# Exakt gepinnt wie die Laufzeit-Abhängigkeiten, damit CI reproduzierbar bleibt.
+pytest==8.4.2

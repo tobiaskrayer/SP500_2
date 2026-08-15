@@ -74,12 +74,21 @@ def run_full_scan(progress_callback=None) -> dict:
 
     if not market["passed"]:
         logger.info(f"Gate 1 nicht bestanden: {market['reason']} — Scan übersprungen")
+        # Gleiches Schema wie der Erfolgspfad. Fehlten hier recommendations_v2 und
+        # universe, würde die UI still danebengreifen (Universum-Banner ausgelassen,
+        # v2-Panel meldet fälschlich "älterer Cache").
+        # universe bewusst hartcodiert statt get_universe_info(): auf diesem Pfad
+        # wurde nie eine Tickerliste geholt — source=None heißt korrekt "kein Scan".
         return {
             "timestamp": timestamp,
             "market": market,
             "recommendations": [],
+            "recommendations_v2": [],
             "all_results": [],
             "scan_duration_s": round(time.time() - start, 1),
+            "universe": {"source": None, "n": 0},
+            "scan_stats": {"requested": 0, "analyzed": 0, "rs_ranked": 0,
+                           "skipped_market_gate": True},
         }
 
     # S&P500-Tickerliste
@@ -138,6 +147,13 @@ def run_full_scan(progress_callback=None) -> dict:
                 except Exception as e:
                     logger.warning(f"Retry {ticker}: {e}")
 
+    # Fundamentals-Cache einmal auf Platte schreiben (statt bei jedem Ticker)
+    try:
+        from analyzer.fundamentals_cache import flush as _flush_fundamentals
+        _flush_fundamentals()
+    except Exception as e:
+        logger.debug(f"Fundamentals-Cache-Flush: {e}")
+
     # Gate-2-Post-Pass: RS-Perzentil-Ranking über alle analysierten Ticker
     results = _apply_rs_percentile(results, market)
 
@@ -157,6 +173,8 @@ def run_full_scan(progress_callback=None) -> dict:
     logger.info(f"Scan abgeschlossen: {len(recommendations)} v1-Empfehlungen, "
                 f"{len(recommendations_v2)} v2-Empfehlungen aus {len(results)} Titeln")
 
+    rs_ranked = sum(1 for r in results if (r.get("rs") or {}).get("rs_score") is not None)
+
     return {
         "timestamp": timestamp,
         "market": market,
@@ -167,6 +185,17 @@ def run_full_scan(progress_callback=None) -> dict:
         # Quelle/Größe der Tickerliste — UI warnt bei degradiertem Universum
         # (Fallback verschiebt das RS-Perzentil-Ranking komplett).
         "universe": get_universe_info(),
+        # Wie viel vom Universum tatsächlich durchkam. Ticker, die an einer
+        # Exception scheitern, fallen nach einem Retry still weg — und der
+        # RS-Perzentil-Cutoff wird relativ zu genau dieser Restmenge berechnet.
+        # Ein Scan über 300 statt 503 Titel verschiebt also jede Gate-2-Schwelle;
+        # ohne diese Zahlen wäre das nirgends sichtbar.
+        "scan_stats": {
+            "requested": total,
+            "analyzed": len(results),
+            "rs_ranked": rs_ranked,   # Basis des Perzentil-Cutoffs
+            "skipped_market_gate": False,
+        },
     }
 
 
@@ -190,7 +219,8 @@ def _apply_rs_percentile(results: list, market: dict) -> list:
     cutoff = float(np.percentile(scores, (1 - top_pct) * 100))
     cutoff_v2 = float(np.percentile(scores, (1 - top_pct_v2) * 100))
     logger.info(f"RS-Perzentil-Cutoff v1 (top {int(top_pct*100)}%): {cutoff:.2f} | "
-                f"v2 (top {int(top_pct_v2*100)}%): {cutoff_v2:.2f}")
+                f"v2 (top {int(top_pct_v2*100)}%): {cutoff_v2:.2f} | "
+                f"Basis: {len(valid)} Titel mit gültigem RS-Score")
 
     for r in results:
         rs = r.get("rs", {})

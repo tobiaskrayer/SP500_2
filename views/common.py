@@ -15,6 +15,19 @@ def _fmt_ts(ts: str) -> str:
 
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_market() -> dict:
+    """
+    Gate-1-Marktcheck, 15 Minuten gecacht.
+
+    check_market() macht zwei yfinance-Calls (^GSPC, ^VIX). Ohne Cache liefe das
+    bei jedem Streamlit-Rerun neu — also bei jedem Klick auf der Portfolio- und
+    der Marktübersichtsseite.
+    """
+    from analyzer.market_filter import check_market
+    return check_market()
+
+
 def _render_exit_signals(exits: dict, entry_price: float = None):
     if not exits or exits.get("recommendation") == "Keine Daten":
         st.info("Keine Exit-Daten verfügbar (zu wenig Kurshistorie).")

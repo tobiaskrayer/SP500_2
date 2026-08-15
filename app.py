@@ -168,19 +168,25 @@ def _force_restart_scan():
 
 # ── Hauptschleife ─────────────────────────────────────────────────────────────
 
-def _render_universe_warning(result: dict | None):
+def _render_scan_quality_warning(result: dict | None):
     """
-    Banner, wenn der Scan auf einem degradierten Universum lief (Wikipedia-Abruf
-    fehlgeschlagen → Cache- oder Top-100-Fallback). Wichtig, weil das
-    RS-Perzentil-Ranking relativ zum Universum berechnet wird: ein geschrumpftes
-    Universum verschiebt alle Gate-2-Schwellen.
+    Banner, wenn der Scan auf einer geschrumpften Datenbasis lief.
+
+    Zwei Ursachen, gleiche Folge: Das RS-Perzentil-Ranking (Gate 2) wird relativ
+    zur tatsächlich ausgewerteten Menge berechnet — jede Lücke verschiebt alle
+    Schwellen.
+      1. Tickerliste degradiert (Wikipedia-Abruf gescheitert → Cache/Top-100).
+      2. Viele Titel an Datenfehlern gescheitert (yfinance-Ausfälle); die fallen
+         nach einem Retry still weg.
     """
     if not result:
         return
+
     uni = result.get("universe") or {}
     source, n = uni.get("source"), uni.get("n", 0)
     if source is None:
-        return  # älterer Scan ohne Metadaten
+        return  # kein Scan gelaufen (rotes Gate 1) oder älterer Cache ohne Metadaten
+
     if source == "fallback" or (n and n < 400):
         st.error(
             f"⚠️ **Degradiertes Universum:** Dieser Scan lief nur über {n} Titel "
@@ -195,6 +201,25 @@ def _render_universe_warning(result: dict | None):
             f"Index-Zusammensetzung nicht gerade geändert hat."
         )
 
+    stats = result.get("scan_stats") or {}
+    requested, analyzed = stats.get("requested", 0), stats.get("analyzed", 0)
+    if not requested or stats.get("skipped_market_gate"):
+        return  # ältere Caches ohne scan_stats / kein Scan gelaufen
+    ratio = analyzed / requested
+    if ratio < 0.75:
+        st.error(
+            f"⚠️ **Unvollständiger Scan:** Nur {analyzed} von {requested} Titeln "
+            f"konnten ausgewertet werden ({ratio:.0%}). Das RS-Perzentil-Ranking "
+            f"wird relativ zu dieser Restmenge berechnet und ist entsprechend "
+            f"verzerrt — Scan wiederholen.",
+            icon="🚨",
+        )
+    elif ratio < 0.90:
+        st.warning(
+            f"{analyzed} von {requested} Titeln ausgewertet ({ratio:.0%}) — einige "
+            f"Kursabrufe sind gescheitert. Das RS-Ranking ist leicht verzerrt."
+        )
+
 
 def main():
     init_app()
@@ -206,7 +231,7 @@ def main():
     render_sidebar_secondary()
     page = render_top_nav()
     result = st.session_state.scan_result
-    _render_universe_warning(result)
+    _render_scan_quality_warning(result)
 
     if page == "Marktübersicht":
         page_market_overview(result)

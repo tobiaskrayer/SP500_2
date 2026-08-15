@@ -5,6 +5,39 @@ import pandas as pd
 from datetime import datetime
 
 
+# ── Gecachte Loader ───────────────────────────────────────────────────────────
+# Ohne Cache lief bei JEDEM Rerun (jeder Klick, jedes Widget) der komplette
+# Aufbau neu: ~2 MB Log parsen, zwei volle Anreicherungsläufe über alle
+# Empfehlungen, dazu yfinance-Calls für alle offenen Positionen.
+#
+# @st.cache_data (nicht cache_resource): enrich_with_current_exits mutiert die
+# rec-Dicts in-place — cache_data gibt pro Aufruf eine Kopie zurück,
+# cache_resource würde das gecachte Objekt beschädigen.
+#
+# Der fingerprint-Parameter ist der Cache-Key: er kommt aus
+# history.logger.log_fingerprint() (Dateigröße + mtime je Shard), sodass ein
+# frischer Scan sofort invalidiert statt erst nach TTL-Ablauf.
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _log_meta(fingerprint: tuple) -> dict:
+    from history.logger import load_log
+    log = load_log()
+    return {"n": len(log), "has_v2": any(e.get("recommendations_v2") for e in log)}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _enriched(fingerprint: tuple, key: str) -> list[dict]:
+    from history.logger import load_log
+    from history.performance import enrich_with_performance
+    return enrich_with_performance(load_log(), key=key)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _enriched_with_exits(fingerprint: tuple) -> list[dict]:
+    from history.performance import enrich_with_current_exits
+    return enrich_with_current_exits(_enriched(fingerprint, "recommendations"))
+
+
 def _render_v1_v2_performance(stats_v1: dict, stats_v2: dict):
     """
     Live-/Out-of-Sample-Vergleich der realisierten Performance v1 vs v2.
@@ -51,27 +84,23 @@ def page_performance():
     st.header("Performance historischer Empfehlungen")
     st.caption("Wie gut haben die Empfehlungen der letzten Monate abgeschnitten?")
 
-    from history.logger import load_log
-    from history.performance import enrich_with_performance
+    from history.logger import log_fingerprint
     from history import analytics as ana
     from history.export import generate_markdown_report, generate_json_export
 
-    log = load_log()
-    if not log:
+    fp = log_fingerprint()
+    meta = _log_meta(fp)
+    if not meta["n"]:
         st.info(
             "Noch keine historischen Empfehlungen gespeichert.\n\n"
             "Nach dem nächsten Scan werden die Empfehlungen automatisch archiviert."
         )
         return
 
-    # Performance-Daten laden (mit Spinner, da yfinance-Calls)
+    # Performance-Daten + aktuelle Exit-Signale (≤91 Tage). Beim ersten Aufruf
+    # mit yfinance-Calls, danach aus dem Streamlit-Cache.
     with st.spinner("Lade historische Performance-Daten..."):
-        enriched = enrich_with_performance(log)
-
-    # Aktuelle Exit-Signale für noch offene Empfehlungen (≤91 Tage)
-    from history.performance import enrich_with_current_exits
-    with st.spinner("Prüfe aktuelle Exit-Signale..."):
-        enriched = enrich_with_current_exits(enriched)
+        enriched = _enriched_with_exits(fp)
 
     # Warn-Banner für aktive Verkaufssignale
     sell_alerts = [
@@ -110,9 +139,10 @@ def page_performance():
     stats = ana.summary_stats(enriched)
 
     # ── v1-vs-v2-Vergleich (Out-of-Sample, sobald v2-Historie existiert) ───────
-    if any(e.get("recommendations_v2") for e in log):
-        enriched_v2 = enrich_with_performance(log, key="recommendations_v2")
-        _render_v1_v2_performance(ana.summary_stats(enriched), ana.summary_stats(enriched_v2))
+    if meta["has_v2"]:
+        enriched_v2 = _enriched(fp, "recommendations_v2")
+        # stats ist oben schon berechnet — nicht ein zweites Mal aggregieren
+        _render_v1_v2_performance(stats, ana.summary_stats(enriched_v2))
 
     # ── Aggregierte Kennzahlen ────────────────────────────────────────────────
     col1, col2, col3, col4 = st.columns(4)

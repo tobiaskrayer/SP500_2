@@ -13,6 +13,7 @@ from datetime import datetime, date
 from pathlib import Path
 
 from config import CACHE
+from storage import write_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -26,35 +27,53 @@ _scan_lock = threading.Lock()
 SCAN_STALE_AFTER_SEC = 15 * 60
 
 
-def get_cache_path(for_date: date = None) -> Path:
-    d = for_date or date.today()
-    return Path(CACHE["dir"]) / f"results_{d.isoformat()}.json"
+# Fester Dateiname statt eines Datums im Namen.
+#
+# Der Actions-Job scannt nur Mo–Fr um 21:30 UTC. Mit einem datierten Namen suchte
+# die App am Samstag nach results_<samstag>.json, fand nichts und zeigte auf allen
+# Empfehlungsseiten "Noch keine Analysedaten" — an Wochenenden und werktags vor
+# 21:30 Uhr war die deployte App damit faktisch leer (auf Streamlit Cloud gibt es
+# auch keinen Scan-Button als Ausweg). Der letzte Scan ist immer der richtige;
+# wie alt er ist, blendet views/market.py ohnehin ein.
+CACHE_FILENAME = "results_latest.json"
 
 
-def load_today_cache() -> dict | None:
-    """Lädt den Cache von heute, falls vorhanden. Sonst None."""
+def get_cache_path() -> Path:
+    return Path(CACHE["dir"]) / CACHE_FILENAME
+
+
+def load_cache() -> dict | None:
+    """Lädt den zuletzt gespeicherten Scan. None, wenn keiner existiert."""
     path = get_cache_path()
-    if path.exists():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            logger.info(f"Cache geladen: {path}")
-            return data
-        except Exception as e:
-            logger.warning(f"Cache-Lesefehler: {e}")
+    if not path.exists():
+        # Fallback für Checkouts aus der Zeit der datierten Dateinamen
+        legacy = sorted(Path(CACHE["dir"]).glob("results_20*.json"))
+        if not legacy:
+            return None
+        path = legacy[-1]
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        logger.info(f"Cache geladen: {path}")
+        return data
+    except Exception as e:
+        logger.warning(f"Cache-Lesefehler: {e}")
     return None
 
 
+# Alias: app.py und tests/test_app_boot.py patchen diesen Namen.
+load_today_cache = load_cache
+
+
 def save_cache(data: dict):
-    """Speichert die Scan-Ergebnisse in den Tages-Cache."""
+    """Speichert die Scan-Ergebnisse in den Tages-Cache (atomar)."""
     Path(CACHE["dir"]).mkdir(exist_ok=True)
     path = get_cache_path()
     try:
         # Serialisierbare Kopie erstellen (pandas-Objekte entfernen)
         serializable = _make_serializable(data)
         _slim_for_cache(serializable)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(serializable, f, ensure_ascii=False)
+        write_json_atomic(path, serializable)
         logger.info(f"Cache gespeichert: {path}")
         _cleanup_old_cache()
     except Exception as e:
@@ -66,6 +85,20 @@ def save_cache(data: dict):
 _CHART_SERIES = ("ma50", "ma200", "rsi", "macd_line", "signal_line",
                  "histogram", "bb_upper", "bb_lower")
 
+# Rundung der Chart-Serien. 2 Nachkommastellen = Cent-Genauigkeit; feiner löst
+# kein Chart auf, kostet aber ~190 KB pro Tages-Commit. 1 Stelle wäre zu grob:
+# MACD-Linie und Histogramm liegen bei niedrigpreisigen Titeln im ±0,5-Bereich
+# und bekämen eine sichtbare Treppe.
+_SERIES_DECIMALS = 2
+
+# Optionale Kürzung auf die letzten N Punkte (None = volles Jahr).
+# ACHTUNG beim Aktivieren: views/recommendations.py plottet positionsbasiert
+# (go.Scatter(y=...) ohne x) in ein shared_xaxes-Subplot — hist["Close"] und ALLE
+# _CHART_SERIES müssen deshalb immer gleich lang bleiben. _slim_for_cache stellt
+# das sicher, weil beide durch dasselbe _vals() laufen; tests/test_slim_cache.py
+# sichert es ab.
+_SERIES_MAX_POINTS = None
+
 
 def _slim_for_cache(serializable: dict):
     """
@@ -73,8 +106,8 @@ def _slim_for_cache(serializable: dict):
 
     Die Detail-Charts brauchen nur Werte-Listen (geplottet wird über die
     Position, nicht das Datum) — als Series→Dict serialisiert schleppen sie
-    aber ~27 Zeichen Datums-Key pro Punkt mit. Listen + Rundung auf 4
-    Nachkommastellen reduzieren die Datei von ~6 MB auf unter 1 MB; das zählt,
+    aber ~27 Zeichen Datums-Key pro Punkt mit. Listen + Rundung auf
+    _SERIES_DECIMALS reduzieren die Datei von ~6 MB auf gut 1 MB; das zählt,
     weil GitHub Actions sie täglich ins Repo committed (Git-Historie wächst
     sonst unbegrenzt). Der Markt-Chart nutzt die Datums-Keys als x-Achse —
     market bleibt deshalb unberührt.
@@ -83,7 +116,9 @@ def _slim_for_cache(serializable: dict):
         if isinstance(obj, dict):
             obj = list(obj.values())
         if isinstance(obj, list):
-            return [None if v is None else round(v, 4) for v in obj]
+            if _SERIES_MAX_POINTS:
+                obj = obj[-_SERIES_MAX_POINTS:]
+            return [None if v is None else round(v, _SERIES_DECIMALS) for v in obj]
         return None
 
     for rec in serializable.get("recommendations", []):
@@ -131,12 +166,18 @@ def _make_serializable(data: dict) -> dict:
 
 
 def _cleanup_old_cache():
-    """Löscht Cache-Dateien älter als CACHE['max_age_days'] Tage."""
+    """
+    Löscht datierte Cache-Dateien älter als CACHE['max_age_days'] Tage.
+
+    Glob bewusst auf 'results_20*.json' beschränkt: results_latest.json darf nie
+    getroffen werden (date.fromisoformat("latest") würde zwar in den except
+    fallen, aber sich darauf zu verlassen wäre Zufall statt Absicht).
+    """
     cache_dir = Path(CACHE["dir"])
     if not cache_dir.exists():
         return
     today = date.today()
-    for f in cache_dir.glob("results_*.json"):
+    for f in cache_dir.glob("results_20*.json"):
         try:
             file_date = date.fromisoformat(f.stem.replace("results_", ""))
             if (today - file_date).days > CACHE["max_age_days"]:

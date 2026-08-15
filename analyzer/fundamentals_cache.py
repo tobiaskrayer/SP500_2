@@ -19,6 +19,7 @@ Zweistufig:
      Lokal nur lesend genutzt — kein Dirty-Working-Tree durch App-Läufe.
 """
 
+import atexit
 import json
 import logging
 import os
@@ -26,6 +27,8 @@ import threading
 import time
 
 import yfinance as yf
+
+from storage import write_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,13 @@ _lock = threading.Lock()
 _cache: dict | None = None   # lazy geladen: {ticker: {"ts": epoch, "info": {...}}}
 _seed: dict | None = None    # lazy geladen, nur lesend
 
+# Schreib-Drosselung: früher schrieb JEDER gecachte Ticker die komplette Datei neu
+# (50-150 Rewrites pro Scan, jeweils im Lock). Jetzt wird höchstens alle
+# _SAVE_INTERVAL_SEC geschrieben; flush() am Scan-Ende und via atexit sichert den Rest.
+_SAVE_INTERVAL_SEC = 30
+_dirty = False
+_last_save = 0.0
+
 
 def _load() -> dict:
     global _cache
@@ -50,7 +60,10 @@ def _load() -> dict:
         return _cache
     try:
         with open(_CACHE_FILE, "r", encoding="utf-8") as f:
-            _cache = json.load(f)
+            loaded = json.load(f)
+        # Defensiv: eine beschädigte Datei (z. B. "null") darf nicht dazu führen,
+        # dass _load() etwas zurückgibt, auf dem .get() fehlschlägt.
+        _cache = loaded if isinstance(loaded, dict) else {}
     except Exception:
         _cache = {}
     return _cache
@@ -69,14 +82,39 @@ def _load_seed() -> dict:
 
 
 def _save():
+    """Schreibt den Cache sofort auf Platte. Aufrufer hält das Lock."""
+    global _dirty, _last_save
+    if not isinstance(_cache, dict):
+        _dirty = False      # nichts Sinnvolles zu schreiben (z. B. nach einem Reset)
+        return
     try:
-        os.makedirs(os.path.dirname(_CACHE_FILE), exist_ok=True)
-        tmp = _CACHE_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(_cache, f, ensure_ascii=False)
-        os.replace(tmp, _CACHE_FILE)
+        write_json_atomic(_CACHE_FILE, _cache)
+        _dirty = False
+        _last_save = time.time()
     except Exception as e:
         logger.debug(f"Fundamentals-Cache Schreibfehler: {e}")
+
+
+def _mark_dirty():
+    """Merkt eine Änderung vor; schreibt höchstens alle _SAVE_INTERVAL_SEC."""
+    global _dirty
+    _dirty = True
+    if time.time() - _last_save > _SAVE_INTERVAL_SEC:
+        _save()
+
+
+def flush():
+    """
+    Schreibt ausstehende Änderungen. Nach dem Scan aufgerufen (scorer) und via
+    atexit — Letzteres ist wichtig, weil scripts/export_fundamentals_seed.py die
+    Datei in einem SEPARATEN Prozess liest, nachdem run_analysis.py beendet ist.
+    """
+    with _lock:
+        if _dirty:
+            _save()
+
+
+atexit.register(flush)
 
 
 def get_info_cached(ticker: str, ttl_days: int = _TTL_DAYS) -> dict:
@@ -95,7 +133,7 @@ def get_info_cached(ticker: str, ttl_days: int = _TTL_DAYS) -> dict:
         seed_entry = _load_seed().get(ticker)
         if seed_entry and (now - seed_entry.get("ts", 0)) < ttl_days * 86400:
             _load()[ticker] = seed_entry
-            _save()
+            _mark_dirty()
             return seed_entry.get("info", {})
 
     # Fetch außerhalb des Locks — Netzwerk darf andere Threads nicht blockieren.
@@ -111,5 +149,5 @@ def get_info_cached(ticker: str, ttl_days: int = _TTL_DAYS) -> dict:
 
     with _lock:
         _load()[ticker] = {"ts": now, "info": info}
-        _save()
+        _mark_dirty()
     return info

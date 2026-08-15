@@ -47,6 +47,16 @@ cache/backtest/
 
 # Atomische Schreibvorgänge hinterlassen bei Fehler eine .tmp-Datei — nie committen
 history/*.tmp
+history/**/*.tmp
+cache/*.tmp
+
+# Generierte Performance-Exporte (Download-Ziel der Performance-Seite, je ~1,8 MB).
+# Landen im Repo-Root und wären sonst einen "git add ." vom Commit entfernt.
+performance_export_*.json
+performance_report_*.md
+
+# Portfolio-History-Cache (Laufzeit, aus Lots + yfinance regenerierbar)
+cache/portfolio_history*.json
 
 # Performance-Cache ist ein reiner Laufzeit-Cache (wird aus Log + yfinance neu
 # aufgebaut) — wie cache/prices/ nicht versionieren.
