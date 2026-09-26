@@ -2,7 +2,7 @@
 Persistenter Tages-Cache für yfinance-Kursdaten.
 
 Speichert OHLCV-DataFrames pro Ticker als Pickle unter cache/prices/<TICKER>.pkl.
-Freshnesscheck: Datei von heute → Treffer; älter → neu laden.
+Freshnesscheck: letzte abgeschlossene NYSE-Sitzung und mindestens 200 Balken.
 
 Vorteil: innerhalb eines Tages (mehrfache Scans, Performance-Seitenaufrufe)
 werden keine redundanten yfinance-Calls gemacht.
@@ -13,9 +13,10 @@ cache/prices/ ist gitignored — reiner Laufzeit-Cache.
 import os
 import pickle
 import logging
-from datetime import date
+import tempfile
 
 import pandas as pd
+from analyzer.sessions import completed_bars, last_completed_session
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +33,18 @@ def _path(ticker: str) -> str:
 
 
 def load(ticker: str) -> pd.DataFrame | None:
-    """Gibt gecachte Daten zurück wenn die Datei von heute ist, sonst None."""
+    """Akzeptiert nur vollständige, adjustierte Kurshistorien bis zur letzten Sitzung."""
     p = _path(ticker)
     if not os.path.exists(p):
         return None
     try:
-        mtime = date.fromtimestamp(os.path.getmtime(p))
-        if mtime < date.today():
-            return None
         with open(p, "rb") as f:
             df = pickle.load(f)
-        if isinstance(df, pd.DataFrame) and len(df) >= 60:
-            return df
+        if isinstance(df, pd.DataFrame) and df.attrs.get("adjustment") == "auto_adjust":
+            df = completed_bars(df)
+            if (len(df) >= 200 and df.index[-1].date() == last_completed_session()
+                    and df.index.is_monotonic_increasing and df.index.is_unique):
+                return df
     except Exception as e:
         logger.debug(f"Cache-Lesefehler {ticker}: {e}")
     return None
@@ -51,14 +52,24 @@ def load(ticker: str) -> pd.DataFrame | None:
 
 def save(ticker: str, df: pd.DataFrame):
     """Speichert DataFrame als Pickle."""
-    if df is None or len(df) < 60:
+    if df is None or len(df) < 200:
         return
+    tmp_path = None
     try:
         _ensure_dir()
-        with open(_path(ticker), "wb") as f:
+        df = completed_bars(df)
+        if len(df) < 200:
+            return
+        df.attrs["adjustment"] = "auto_adjust"
+        with tempfile.NamedTemporaryFile("wb", dir=_CACHE_DIR, suffix=".tmp", delete=False) as f:
+            tmp_path = f.name
             pickle.dump(df, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp_path, _path(ticker))
     except Exception as e:
         logger.debug(f"Cache-Schreibfehler {ticker}: {e}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 def load_many(tickers: list[str]) -> tuple[dict, list[str]]:

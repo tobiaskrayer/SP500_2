@@ -75,6 +75,21 @@ def page_backtest():
 
 
 def _render_backtest_results(res: dict):
+    from analyzer.strategy import strategy_metadata
+    if res.get("strategy") != strategy_metadata():
+        st.warning("Historischer Backtest mit anderer oder unbekannter Strategieversion. Für die aktuelle Auswahl neu berechnen.")
+    equity = res.get("equity")
+    if equity and equity.get("curve"):
+        st.subheader("Portfolio mit Cash und Ausführungskosten")
+        a, b, c = st.columns(3)
+        a.metric("Portfoliorendite", f"{equity['return_pct']:+.2f}%")
+        b.metric("Maximaler Drawdown", f"{equity['max_drawdown_pct']:.2f}%")
+        c.metric("Sharpe (täglich, annualisiert)", f"{equity['sharpe']:.2f}" if equity.get("sharpe") is not None else "—")
+        st.line_chart(pd.DataFrame(equity["curve"]).set_index("date")[["equity", "cash"]])
+        st.caption("Einstieg frühestens zur nächsten Eröffnung; feste Haltedauer, begrenztes Kapital. Sharpe mit risikofreiem Zins 0.")
+        st.caption("Annahmen: " + str(equity["assumptions"]))
+        st.warning("Grenzen: " + "; ".join(equity["limitations"]))
+    st.subheader("Einzelsignale – überlappende Renditen")
     from datetime import datetime as _dt
 
     computed_at = res.get("computed_at", "")
@@ -107,8 +122,8 @@ def _render_backtest_results(res: dict):
     c4.metric("Ø vs SPY 1M", f"{vs_spy:+.2f}%" if vs_spy is not None else "—",
               delta_color="normal" if (vs_spy or 0) >= 0 else "inverse")
     sharpe = res.get("sharpe_1m")
-    c5.metric("Sharpe (1M)", f"{sharpe:.2f}" if sharpe is not None else "—",
-              help="Ø Return / Standardabweichung. > 0.5 = gut, > 1.0 = sehr gut.")
+    c5.metric("Mittelwert / Streuung", f"{sharpe:.2f}" if sharpe is not None else "—",
+              help="Verhältnis überlappender Signalrenditen; keine Portfolio-Sharpe.")
     hit3m = res.get("hit_rate_3m")
     c6.metric("Trefferquote 3M", f"{hit3m:.1f}%" if hit3m is not None else "—",
               delta_color="normal" if (hit3m or 0) >= 50 else "inverse")
@@ -212,7 +227,7 @@ def _render_backtest_results(res: dict):
                 rows.append({
                     "Datum": t["date"],
                     "Ticker": t["ticker"],
-                    "Einstieg": f"${t.get('entry_price', 0):.2f}",
+                    "Einstieg": f"${t['entry_price']:.2f}" if t.get("entry_price") is not None else "—",
                     "Tech-Score": f"{t.get('tech_score', 0)*100:.0f}%",
                     "RS-Score": f"{t.get('rs_score', 0):+.1f}",
                     "Perf 1M": f"{t['perf_1m']:+.1f}%" if t.get("perf_1m") is not None else "—",
@@ -265,7 +280,7 @@ def _render_sweep_section(years: int, step_weeks: int):
             objective = st.selectbox(
                 "Zielmetrik",
                 options=["avg_vs_spy_1m", "sharpe_1m", "hit_rate_1m"],
-                format_func={"avg_vs_spy_1m": "Ø vs SPY 1M", "sharpe_1m": "Sharpe (1M)", "hit_rate_1m": "Trefferquote 1M"}.get,
+                format_func={"avg_vs_spy_1m": "Ø vs SPY 1M", "sharpe_1m": "Mittelwert / Streuung", "hit_rate_1m": "Trefferquote 1M"}.get,
                 key="sweep_objective",
             )
         with sc2:
@@ -333,7 +348,7 @@ def _render_sweep_results(sweep: dict):
     best = sweep.get("best")
     current = sweep.get("current_config", {})
     obj = sweep.get("objective", "avg_vs_spy_1m")
-    obj_label = {"avg_vs_spy_1m": "vs SPY 1M", "sharpe_1m": "Sharpe (1M)", "hit_rate_1m": "Treffer %"}.get(obj, obj)
+    obj_label = {"avg_vs_spy_1m": "vs SPY 1M", "sharpe_1m": "Mittelwert / Streuung", "hit_rate_1m": "Treffer %"}.get(obj, obj)
 
     st.caption(
         f"Berechnet: {sweep.get('computed_at','')[:10]} | "
@@ -525,7 +540,7 @@ def _render_playground(years: int, step_weeks: int):
                    delta_color="normal" if (_a1m or 0) >= 0 else "inverse")
         pc4.metric("Ø vs SPY 1M",      f"{_vs:+.2f}%" if _vs is not None else "—",
                    delta_color="normal" if (_vs or 0) >= 0 else "inverse")
-        pc5.metric("Sharpe (1M)",      f"{_sh:.2f}" if _sh is not None else "—")
+        pc5.metric("Mittelwert / Streuung", f"{_sh:.2f}" if _sh is not None else "—")
         pc6.metric("Trefferquote 3M",  f"{_h3m:.1f}%" if _h3m is not None else "—",
                    delta_color="normal" if (_h3m or 0) >= 50 else "inverse")
 

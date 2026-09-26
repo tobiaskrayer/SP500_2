@@ -5,29 +5,33 @@ import numpy as np
 import pandas as pd
 
 from backtest.runner import _forward_return, _make_bt_dates
+from config import BACKTEST
 
 
 def _price_df():
     # Handelstage Mo-Fr, 100 Tage ab 2024-01-01, Kurs steigt 1/Tag (100..199)
     idx = pd.bdate_range("2024-01-01", periods=100)
-    return pd.DataFrame({"close": np.arange(100, 200, dtype=float)}, index=idx)
+    values = np.arange(100, 200, dtype=float)
+    return pd.DataFrame({"close": values, "open": values}, index=idx)
 
 
 class TestForwardReturn:
     def test_weekend_takes_first_trading_day_after_target(self):
-        # from 2024-01-05 (Fr, Kurs 104), +30 Tage = So 2024-02-04
-        # -> erster Handelstag >= target ist Mo 2024-02-05 (Kurs 125)
+        # Signal am Fr: Einstieg erst Mo 08.01. zur Eröffnung, Ausstieg nach
+        # 30 Kalendertagen am Mi 07.02.; beide Seiten enthalten Modellkosten.
         r = _forward_return(_price_df(), date(2024, 1, 5), 30)
-        assert r == round((125 / 104 - 1) * 100, 2)
+        cost = (BACKTEST["cost_bps_per_side"] + BACKTEST["slippage_bps_per_side"]) / 10_000
+        assert r == round((127 * (1-cost) / (105 * (1+cost)) - 1) * 100, 2)
 
     def test_delisting_returns_none(self):
         # Daten enden vor target -> None statt verkuerzter Periode als 1M-Return
         assert _forward_return(_price_df(), date(2024, 5, 1), 30) is None
 
     def test_target_on_trading_day_is_exact(self):
-        # +31 Tage = Mo 2024-02-05 -> exakt dieser Tag
+        # Der Zeithorizont beginnt am ausführbaren nächsten Open.
         r = _forward_return(_price_df(), date(2024, 1, 5), 31)
-        assert r == round((125 / 104 - 1) * 100, 2)
+        cost = (BACKTEST["cost_bps_per_side"] + BACKTEST["slippage_bps_per_side"]) / 10_000
+        assert r == round((128 * (1-cost) / (105 * (1+cost)) - 1) * 100, 2)
 
 
 class TestBtDates:

@@ -3,18 +3,52 @@
 Streamlit-App, die täglich alle ~503 S&P500-Titel durch ein 4-stufiges
 Gate-System schickt und Kaufkandidaten für eine Haltedauer von 1–8 Wochen
 priorisiert. Mit Portfolio-Tracking (Ein-Nutzer, Passwort-Gate, Git/JSON-Storage),
-Performance-Nachverfolgung und einem 10-Jahres-Backtest, der die eigene
-Empfehlungslogik validiert.
+Performance-Nachverfolgung und einem historischen Backtest zur Untersuchung
+der Auswahlregeln.
 
-> **Keine Anlageberatung.** Der gemessene Edge ist statistisch, moderat und
-> trägt Survivorship-Bias (siehe [backtest/FINDINGS.md](backtest/FINDINGS.md)).
+> Historische Ergebnisse sind kein Nachweis künftiger Renditen. Frühere
+> Auswertungen in [backtest/FINDINGS.md](backtest/FINDINGS.md) verwenden ältere Regeln.
+
+## Umsetzung September 2026
+
+Die aktive Oberfläche verwendet einheitlich v2; v1 bleibt als Diagnose und in
+der bisherigen Historie erhalten. Relative Stärke wird vor den weiteren
+Filtern über das verfügbare Universum gerankt. Fundamentaldaten werden auch
+für v2-Kandidaten geladen, die den technischen v1-Score nicht erreichen.
+Live-Scan und Backtest teilen Auswahl- und Marktregeln (S&P500 und VIX).
+Historische Fundamentals fehlen weiterhin und werden im Backtest nicht erfunden.
+
+Scans enthalten Strategieversion, Konfigurationshash und Kursstand. Der Cache
+akzeptiert nur abgeschlossene NYSE-Sitzungen, einschließlich Feiertagen,
+Sommerzeit und verkürzter Handelstage. Neue Scan-Dateien aktualisieren auch
+bereits geöffnete Sitzungen. Erneute versionierte Scans desselben Tages
+bewahren den vorherigen Stand unter `revisions` im Monatslog auf.
+
+Der Standardbacktest untersucht v2 und ergänzt die Signalstatistik um eine
+kapitalbegrenzte Portfoliokurve: nächste Eröffnung, 30 Kalendertage Haltedauer,
+10 Basispunkte Kosten plus 5 Basispunkte Slippage je Seite, maximal 10 % je
+Position, Rest als unverzinster Cash. Drawdown und annualisierte Sharpe werden
+aus der täglichen Portfoliokurve berechnet. Optimierung/Spielwiese bleiben
+v1-Experimente; der Trainingsbereich erhält Abstand zum Testzeitraum.
+
+Die Kandidatenansicht bietet numerisch sortierbare Kurse und einen Budgetrechner
+(10 % Titel-, 30 % Sektorgrenze), der bestehende Bestände auf Wunsch zu aktuellen
+EUR-Werten einbezieht. Kriterienwerte sind keine Gewinnwahrscheinlichkeiten.
+Automatische Stop- und Zielkurse sind deaktiviert; Exit-Signale bleiben
+Beobachtungshinweise.
+
+Offene Grenzen: heutige Indexzusammensetzung statt Point-in-Time-Universum,
+keine historischen Fundamentals/Sektoren oder modellierten Delistings,
+keine unabhängige Validierung des Renditevorteils. Die Performance-Historie
+verwendet weiterhin ihre bisherige Schlusskursmessung; sie ist keine
+Ausführungssimulation und nicht direkt mit dem neuen Backtest vergleichbar.
 
 ## Die 4 Gates
 
 | Gate | Modul | Prüft |
 |---|---|---|
 | 1 — Markt | `analyzer/market_filter.py` | VIX (3-Tage-Mittel), S&P500 über 50/200-Tage-MA. Rot → keine Empfehlungen. |
-| 2 — Relative Stärke | `analyzer/relative_strength.py` | 3M+6M-Outperformance vs. S&P500, Perzentil-Ranking übers Universum. **Das einzige Signal mit nachgewiesener Vorhersagekraft.** |
+| 2 — Relative Stärke | `analyzer/relative_strength.py` | 3M+6M-Outperformance vs. S&P500, Perzentil-Ranking übers Universum. |
 | 3 — Technik | `analyzer/technical.py` | MA50/200, RSI, MACD, Bollinger, Volumen (6 Signale, Score-Schwelle 70 %). |
 | 4 — Fundamentals | `analyzer/fundamental.py` | KGV, Umsatzwachstum, Marge, Verschuldung, FCF (Score-Schwelle 60 %). |
 

@@ -101,6 +101,7 @@ def check_technical(hist: pd.DataFrame) -> dict:
             "bb_lower": bb_lower,
             "bb_ma": bb_ma,
             "rsi_value": round(rsi_val, 1),
+            "rsi_value_raw": float(rsi_val),
             "bb_pct": round(bb_pct * 100, 1),
             "price": round(price, 2),
             "ma50_val": round(ma50, 2),

@@ -21,6 +21,9 @@ _scan_running = False
 _scan_started_at: float | None = None  # time.time() bei Start des laufenden Scans
 _scan_epoch = 0                         # Generations-Zähler; steigt bei force-Restart
 _scan_lock = threading.Lock()
+_scheduler_lock = threading.Lock()
+_scheduler = None
+_scan_error = None
 
 # Ein Scan, der länger als das hier läuft, gilt als "möglicherweise verhakt".
 # Ein normaler Full-Scan über das S&P500-Universum dauert nur wenige Minuten.
@@ -65,7 +68,7 @@ def load_cache() -> dict | None:
 load_today_cache = load_cache
 
 
-def save_cache(data: dict):
+def save_cache(data: dict) -> bool:
     """Speichert die Scan-Ergebnisse in den Tages-Cache (atomar)."""
     Path(CACHE["dir"]).mkdir(exist_ok=True)
     path = get_cache_path()
@@ -76,8 +79,10 @@ def save_cache(data: dict):
         write_json_atomic(path, serializable)
         logger.info(f"Cache gespeichert: {path}")
         _cleanup_old_cache()
+        return True
     except Exception as e:
         logger.error(f"Cache-Schreibfehler: {e}")
+        return False
 
 
 # Chart-Serien in tech.indicators, die die App tatsächlich zeichnet.
@@ -121,7 +126,9 @@ def _slim_for_cache(serializable: dict):
             return [None if v is None else round(v, _SERIES_DECIMALS) for v in obj]
         return None
 
-    for rec in serializable.get("recommendations", []):
+    for rec in serializable.get("recommendations", []) + serializable.get("recommendations_v2", []):
+        if _SERIES_MAX_POINTS and rec.get("chart_dates"):
+            rec["chart_dates"] = rec["chart_dates"][-_SERIES_MAX_POINTS:]
         hist = rec.get("hist")
         if isinstance(hist, dict):
             close = _vals(hist.get("Close"))
@@ -149,7 +156,7 @@ def _make_serializable(data: dict) -> dict:
     if isinstance(data, pd.Series):
         return {str(k): (None if (pd.isna(v) or not np.isfinite(v)) else float(v)) for k, v in data.items()}
     if isinstance(data, pd.DataFrame):
-        return data.to_dict(orient="list")
+        return _make_serializable(data.to_dict(orient="list"))
     if isinstance(data, (np.integer,)):
         return int(data)
     if isinstance(data, (np.floating,)):
@@ -229,7 +236,7 @@ def trigger_scan_background(on_complete=None, force=False):
     Der alte Thread wird per Epoch entkoppelt und kann Status/Ergebnis nicht mehr
     beeinflussen.
     """
-    global _scan_running, _scan_started_at, _scan_epoch
+    global _scan_running, _scan_started_at, _scan_epoch, _scan_error
 
     with _scan_lock:
         if _scan_running and not force:
@@ -237,33 +244,35 @@ def trigger_scan_background(on_complete=None, force=False):
             return
         if force:
             _scan_epoch += 1  # laufenden Thread entkoppeln
+        _scan_error = None
         my_epoch = _scan_epoch
         _scan_running = True  # innerhalb des Locks setzen — verhindert Race Condition
         _scan_started_at = time.time()
 
     def _run():
-        global _scan_running, _scan_started_at
+        global _scan_running, _scan_started_at, _scan_error
         try:
             from analyzer.scorer import run_full_scan
             logger.info("Hintergrund-Scan gestartet")
             result = run_full_scan()
-            # Nur committen, wenn dieser Scan noch der aktuelle ist (kein force-Restart dazwischen).
+            # Serialize publication with force reset; a superseded scan cannot overwrite it.
             with _scan_lock:
-                superseded = my_epoch != _scan_epoch
-            if superseded:
-                logger.info("Scan-Ergebnis verworfen — durch Neustart ersetzt")
-                return
-            save_cache(result)
-            # Empfehlungen für Performance-Tracking historisieren
-            try:
-                from history.logger import append_scan_result
-                append_scan_result(result)
-            except Exception as hist_err:
-                logger.warning(f"History-Logging fehlgeschlagen: {hist_err}")
+                if my_epoch != _scan_epoch:
+                    return
+                if not save_cache(result):
+                    raise OSError("Scan konnte nicht gespeichert werden")
+                try:
+                    from history.logger import append_scan_result
+                    append_scan_result(result)
+                except Exception as hist_err:
+                    logger.warning("History-Logging fehlgeschlagen: %s", hist_err)
             if on_complete:
                 on_complete(result)
         except Exception as e:
             logger.error(f"Hintergrund-Scan fehlgeschlagen: {e}")
+            with _scan_lock:
+                if my_epoch == _scan_epoch:
+                    _scan_error = str(e)
         finally:
             # Status nur freigeben, wenn dieser Thread noch der aktuelle ist — ein
             # zwischenzeitlicher force-Restart hat sonst schon einen neuen Scan gesetzt.
@@ -276,30 +285,40 @@ def trigger_scan_background(on_complete=None, force=False):
     t.start()
 
 
-def start_daily_scheduler(app_state: dict):
-    """
-    Startet einen täglichen Scheduler (apscheduler).
-    Führt täglich um config.CACHE['refresh_hour'] Uhr einen neuen Scan durch.
-    """
+def cache_fingerprint():
+    path = get_cache_path()
     try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-
-        def daily_job():
-            logger.info("Täglicher Scan gestartet (Scheduler)")
-            trigger_scan_background(
-                on_complete=lambda r: app_state.update({"scan_result": r, "last_update": datetime.now().isoformat()})
-            )
-
-        scheduler = BackgroundScheduler()
-        scheduler.add_job(
-            daily_job,
-            trigger="cron",
-            hour=CACHE["refresh_hour"],
-            minute=0,
-        )
-        scheduler.start()
-        logger.info(f"Täglicher Scheduler aktiv (täglich um {CACHE['refresh_hour']}:00 Uhr)")
-        return scheduler
-    except ImportError:
-        logger.warning("apscheduler nicht installiert — kein automatischer Scheduler")
+        stat = path.stat()
+        return stat.st_mtime_ns, stat.st_size
+    except OSError:
         return None
+
+
+def scan_error():
+    return _scan_error
+
+
+def start_daily_scheduler(app_state=None):
+    """One scheduler per process; NYSE calendar handles DST and holidays."""
+    global _scheduler
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from analyzer.sessions import last_completed_session
+    from datetime import timezone
+    with _scheduler_lock:
+        if _scheduler is not None:
+            return _scheduler
+        def daily_job():
+            session = str(last_completed_session())
+            cached = load_cache() or {}
+            from analyzer.strategy import strategy_metadata
+            if ((cached.get("market") or {}).get("data_as_of") == session
+                    and (cached.get("market") or {}).get("data_complete")
+                    and cached.get("strategy") == strategy_metadata()):
+                return
+            trigger_scan_background()
+        _scheduler = BackgroundScheduler(timezone="America/New_York")
+        _scheduler.add_job(daily_job, trigger="cron", day_of_week="mon-fri",
+                           hour=CACHE["refresh_hour"], minute=0, max_instances=1,
+                           coalesce=True, misfire_grace_time=3600)
+        _scheduler.start()
+        return _scheduler

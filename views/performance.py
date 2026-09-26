@@ -81,6 +81,7 @@ def _render_v1_v2_performance(stats_v1: dict, stats_v2: dict):
 
 
 def page_performance():
+    st.info("Diese Historie misst Kursänderungen ab dem gespeicherten Signaltag. Sie modelliert keine Ausführung zur nächsten Eröffnung und ist nicht direkt mit dem neuen Portfolio-Backtest vergleichbar.")
     st.header("Performance historischer Empfehlungen")
     st.caption("Wie gut haben die Empfehlungen der letzten Monate abgeschnitten?")
 

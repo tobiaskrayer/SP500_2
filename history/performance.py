@@ -272,15 +272,14 @@ def _load_hist_for_perf(ticker: str, start_str: str, end_date) -> object:
         if cached is not None:
             try:
                 cached = _tz_naive(cached)
-                sliced = cached[cached.index >= start_str]
-                if len(sliced) >= 2:
+                sliced = cached[(cached.index >= start_str) & (cached.index <= str(end_date))]
+                if len(sliced) >= 2 and cached.index[0].date() <= date.fromisoformat(start_str):
                     return sliced
             except Exception:
                 pass
     # Fallback: direkter Download
     hist = yf.Ticker(ticker).history(start=start_str, end=str(end_date + timedelta(days=1)))
-    if _CACHE_AVAILABLE and hist is not None and len(hist) >= 60:
-        _price_cache_save(ticker, hist)
+    # Performance windows must never overwrite the scanner's full-year cache.
     return _tz_naive(hist) if hist is not None else hist
 
 

@@ -1,5 +1,10 @@
 # 10-Jahres-Backtest: Befunde & v2-Algorithmus
 
+> Archiv früherer Experimente. Seit September 2026 verwenden Scan und Backtest
+> gemeinsame Markt-/Auswahlregeln sowie andere Ausführungsannahmen (nächste
+> Eröffnung, Kosten, Kapitalgrenzen). Die folgenden Kennzahlen wurden damit
+> noch nicht neu berechnet und belegen keinen Renditevorteil der aktuellen Version.
+
 Empirische Auswertung der aktuellen Empfehlungslogik über 10 Jahre (2016–2026),
 volles S&P-500-Universum (503 Titel, heutige Zusammensetzung), Scan alle 2 Wochen.
 Reproduzierbar via:

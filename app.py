@@ -27,9 +27,12 @@ def init_app():
         st.session_state.scan_progress = None
 
     # Cache laden
-    if st.session_state.scan_result is None:
+    from scheduler import cache_fingerprint
+    fingerprint = cache_fingerprint()
+    if st.session_state.scan_result is None or st.session_state.get("cache_fingerprint") != fingerprint:
         from scheduler import load_today_cache
         cached = load_today_cache()
+        st.session_state.cache_fingerprint = fingerprint
         if cached:
             st.session_state.scan_result = cached
 
@@ -100,7 +103,7 @@ def render_sidebar_secondary():
     """Sidebar: nur noch sekundäre Infos (Scan-Button lokal, Timestamp, Disclaimer)."""
     with st.sidebar:
         st.title("📈 S&P500 Analyse")
-        st.caption("Sehr konservative Kaufempfehlungen")
+        st.caption("Systematische Aktienauswahl für 1–8 Wochen")
         st.divider()
 
         from portfolio.auth import render_logout_button
@@ -221,6 +224,17 @@ def _render_scan_quality_warning(result: dict | None):
         )
 
 
+@st.fragment(run_every="10s")
+def _poll_scan():
+    from scheduler import cache_fingerprint, is_scan_running, scan_error
+    if cache_fingerprint() != st.session_state.get("cache_fingerprint"):
+        st.rerun()
+    if is_scan_running():
+        st.info("Analyse läuft. Das Ergebnis wird nach Abschluss automatisch übernommen.")
+    elif scan_error():
+        st.error(f"Letzter Scan fehlgeschlagen: {scan_error()}")
+
+
 def main():
     init_app()
 
@@ -232,6 +246,9 @@ def main():
     page = render_top_nav()
     result = st.session_state.scan_result
     _render_scan_quality_warning(result)
+    from views.common import render_data_status
+    render_data_status(result)
+    _poll_scan()
 
     if page == "Marktübersicht":
         page_market_overview(result)

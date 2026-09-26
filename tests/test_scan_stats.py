@@ -5,7 +5,7 @@ from analyzer import scorer
 
 
 _EXPECTED_KEYS = {"timestamp", "market", "recommendations", "recommendations_v2",
-                  "all_results", "scan_duration_s", "universe", "scan_stats"}
+                  "all_results", "scan_duration_s", "universe", "scan_stats", "strategy"}
 
 
 def test_red_market_returns_full_schema(monkeypatch):
@@ -30,6 +30,7 @@ def test_red_market_returns_full_schema(monkeypatch):
     assert result["all_results"] == []
     assert result["universe"] == {"source": None, "n": 0}
     assert result["scan_stats"]["skipped_market_gate"] is True
+    assert result["strategy"]["version"]
 
 
 @pytest.mark.parametrize("analyzed,requested,expect", [

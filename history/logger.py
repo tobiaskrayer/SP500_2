@@ -84,6 +84,9 @@ def append_scan_result(result: dict):
 
     entry = {
         "date": today,
+        "timestamp": ts,
+        "strategy": result.get("strategy"),
+        "data_as_of": market.get("data_as_of"),
         "market_context": {
             "vix": market.get("vix"),
             "sp500_price": market.get("sp500_price"),
@@ -105,7 +108,15 @@ def append_scan_result(result: dict):
 
     # Nur den Shard des betroffenen Monats laden und neu schreiben.
     path = _shard_path(today)
-    shard = [e for e in _load_shard(path) if e.get("date") != today]
+    previous = _load_shard(path)
+    if result.get("strategy"):
+        same_day = next((e for e in previous if e.get("date") == today), None)
+        if same_day:
+            revisions = list(same_day.get("revisions", []))
+            if same_day.get("timestamp") != ts or same_day.get("strategy") != entry["strategy"]:
+                revisions.append({k: v for k, v in same_day.items() if k != "revisions"})
+            entry["revisions"] = revisions
+    shard = [e for e in previous if e.get("date") != today]
     shard.append(entry)
     shard.sort(key=lambda e: e["date"])
 

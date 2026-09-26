@@ -8,6 +8,8 @@ import yfinance as yf
 import pandas as pd
 import logging
 from config import MARKET
+from analyzer.strategy import evaluate_market
+from analyzer.sessions import completed_bars, last_completed_session
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +46,9 @@ def check_market() -> dict:
     try:
         # S&P500 Daten
         sp = yf.Ticker("^GSPC")
-        sp_hist = sp.history(period="1y")
-        if sp_hist.empty:
-            result["reason"] = "Keine S&P500-Daten verfügbar"
+        sp_hist = completed_bars(sp.history(period="1y"))
+        if len(sp_hist) < 200 or sp_hist.index[-1].date() != last_completed_session():
+            result["reason"] = "S&P500-Daten unvollständig oder veraltet"
             return result
 
         sp_close = sp_hist["Close"]
@@ -63,34 +65,22 @@ def check_market() -> dict:
 
         # VIX Daten — 3-Tage-Mittel glättet Eintages-Spikes
         vix = yf.Ticker("^VIX")
-        vix_hist = vix.history(period="5d")
-        if vix_hist.empty:
-            logger.warning("VIX-Daten nicht verfügbar — VIX-Kriterium wird übersprungen")
+        vix_hist = completed_bars(vix.history(period="1mo"))
+        if len(vix_hist) < 3 or vix_hist.index[-1].date() != last_completed_session():
+            logger.warning("VIX-Daten fehlen oder sind veraltet — Marktfilter bleibt geschlossen")
             vix_level = None
         else:
             vix_level = float(vix_hist["Close"].tail(3).mean())
         result["vix"] = round(vix_level, 2) if vix_level is not None else None
 
-        # Entscheidung
-        reasons = []
-        if vix_level is not None and vix_level > MARKET["vix_stop"]:
-            reasons.append(f"VIX zu hoch ({vix_level:.1f} > {MARKET['vix_stop']})")
-        if not result["sp500_above_ma200"]:
-            reasons.append(f"S&P500 unter 200-Tage-MA ({sp_price:.0f} vs {ma200:.0f})")
-        if not result["sp500_above_ma50"]:
-            reasons.append(f"S&P500 stark unter 50-Tage-MA ({sp_price:.0f} vs {ma50:.0f})")
-
-        if reasons:
-            result["passed"] = False
-            result["reason"] = " | ".join(reasons)
-        else:
-            result["passed"] = True
-            if vix_level is not None and vix_level > MARKET["vix_max"]:
-                result["warning"] = True
-                result["reason"] = f"VIX erhöht ({vix_level:.1f}, 3T-Mittel) — vorsichtig handeln"
-            elif vix_level is None:
-                result["warning"] = True
-                result["reason"] = "VIX-Daten nicht verfügbar — VIX-Check übersprungen"
+        result.update(evaluate_market(float(sp_price), float(ma50), float(ma200), vix_level))
+        result["data_as_of"] = str(sp_hist.index[-1].date())
+        if not result["data_complete"]:
+            result["reason"] = "Marktdaten unvollständig — keine neue Auswahl"
+        elif not result["passed"]:
+            result["reason"] = "VIX oder Abstand zum 50/200-Tage-Mittel außerhalb der Grenzen"
+        elif result["warning"]:
+            result["reason"] = "VIX erhöht — Marktrisiko beachten"
 
     except Exception as e:
         logger.error(f"Marktfilter-Fehler: {e}")

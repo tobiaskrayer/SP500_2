@@ -20,6 +20,9 @@ import pandas as pd
 import yfinance as yf
 
 from analyzer.indicators import rsi_series as _rsi_series
+from analyzer.strategy import SelectionInput, select, evaluate_market, strategy_metadata
+from config import BACKTEST
+from analyzer.sessions import completed_bars, last_completed_session
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +92,10 @@ def _download_prices(tickers: list[str], years: int, progress_callback=None) -> 
 
     for t in tickers:
         df = _cache_load(t)
-        if df is not None and len(df) >= 200:
+        df = completed_bars(df)
+        if (df is not None and len(df) >= 200
+                and df.index[-1].date() == last_completed_session()
+                and (df.index[-1] - df.index[0]).days >= years * 365 + 300):
             cached[t] = df
         else:
             to_download.append(t)
@@ -109,8 +115,9 @@ def _download_prices(tickers: list[str], years: int, progress_callback=None) -> 
                 )
                 for ticker in batch:
                     try:
-                        df = raw[ticker].copy() if len(batch) > 1 else raw.copy()
+                        df = raw[ticker].copy() if isinstance(raw.columns, pd.MultiIndex) else raw.copy()
                         df = df.dropna(how="all")
+                        df = completed_bars(df)
                         if len(df) >= 100:
                             _cache_save(ticker, df)
                             cached[ticker] = df
@@ -135,6 +142,9 @@ def _precompute(hist: pd.DataFrame) -> pd.DataFrame:
       - Bollinger-Schwelle: TECHNICAL["bb_upper_pct"] aus config (nicht hartkodiert)
     Der tech_score wird pro Parameter-Satz via _tech_score_from_row abgeleitet.
     """
+    hist = hist.copy()
+    hist.index = pd.DatetimeIndex(hist.index).tz_localize(None).normalize()
+    hist = hist[~hist.index.duplicated(keep="last")].sort_index().dropna(subset=["Close"])
     close = hist["Close"]
     vol = hist.get("Volume", pd.Series(dtype=float))
 
@@ -142,7 +152,7 @@ def _precompute(hist: pd.DataFrame) -> pd.DataFrame:
     ma200 = close.rolling(200).mean()
 
     # RSI: Wilder-Glättung — identisch zum Live-Scan
-    rsi = _rsi_series(close)
+    rsi = _rsi_series(close).fillna(50.0)
 
     # MACD: Histogramm > 0  ⟺  macd_line > signal_line
     macd_line = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
@@ -154,20 +164,21 @@ def _precompute(hist: pd.DataFrame) -> pd.DataFrame:
     bb_std = close.rolling(20).std()
     bb_lower = bb_ma - 2 * bb_std
     bb_upper = bb_ma + 2 * bb_std
-    bb_range = (bb_upper - bb_lower).replace(0, np.nan)
+    bb_range = bb_upper - bb_lower + 1e-9
     bb_pct = (close - bb_lower) / bb_range
     bb_ok = bb_pct < _BB_UPPER_PCT
 
     # Volumen: 5-Tage-Schnitt vs. 20-Tage-Schnitt — wie Live-Scan
     if len(vol):
         vol_recent = vol.rolling(5).mean()
-        vol_avg = vol.rolling(20).mean()
+        vol_avg = vol.rolling(TECHNICAL["volume_lookback"]).mean()
         vol_ratio = (vol_recent / vol_avg.replace(0, np.nan)).replace([np.inf, -np.inf], 0).fillna(0)
     else:
         vol_ratio = pd.Series(0.0, index=close.index)
 
     return pd.DataFrame({
         "close": close,
+        "open": hist.get("Open", pd.Series(float("nan"), index=hist.index)),
         "ma50": ma50,
         "ma200": ma200,
         "above_ma50": close > ma50,
@@ -227,25 +238,46 @@ def _return_since(close_slice: pd.Series, days: int) -> float | None:
         return None
 
 
-def _forward_return(indicator_df: pd.DataFrame, from_date: date, days: int) -> float | None:
-    """Kursrendite `days` Kalendertage nach from_date."""
-    try:
-        target = from_date + timedelta(days=days)
-        # Exit = erster Handelstag >= target (max. 5 Tage Toleranz für Wochenende/Feiertage).
-        # Vorher wurde der LETZTE Kurs bis target+5 genommen — die Haltedauer war damit
-        # systematisch bis zu 5 Tage zu lang und bei Datenende (Delisting) beliebig kurz.
-        pos = len(_slice_to_date(indicator_df, target - timedelta(days=1)))
-        within_tolerance = len(_slice_to_date(indicator_df, target + timedelta(days=5)))
-        if pos >= within_tolerance:
-            return None
-        entry_row = _slice_to_date(indicator_df, from_date)
-        if len(entry_row) < 1:
-            return None
-        entry_price = float(entry_row["close"].iloc[-1])
-        exit_price = float(indicator_df["close"].iloc[pos])
-        return round((exit_price / entry_price - 1) * 100, 2)
-    except Exception:
+def _execution_window(indicator_df, from_date, days):
+    # Signal uses final close; trade only at the next session's open.
+    index = pd.DatetimeIndex(indicator_df.index).tz_localize(None).normalize()
+    entry = index.searchsorted(pd.Timestamp(from_date), side="right")
+    if entry >= len(index) or (index[entry].date() - from_date).days > 5:
         return None
+    target = index[entry] + pd.Timedelta(days=days)
+    end = index.searchsorted(target)
+    if end >= len(index) or (index[end] - target).days > 5:
+        return None
+    return entry, end
+
+
+def _entry_details(indicator_df, from_date):
+    index = pd.DatetimeIndex(indicator_df.index).tz_localize(None).normalize()
+    pos = index.searchsorted(pd.Timestamp(from_date), side="right")
+    if pos >= len(index) or (index[pos] - pd.Timestamp(from_date)).days > 5 or "open" not in indicator_df:
+        return {"entry_date": None, "entry_price": None}
+    price = float(indicator_df["open"].iloc[pos])
+    if not np.isfinite(price) or price <= 0:
+        return {"entry_date": None, "entry_price": None}
+    return {"entry_date": str(index[pos].date()), "entry_price": price}
+
+
+def _forward_return(indicator_df: pd.DataFrame, from_date: date, days: int) -> float | None:
+    window = _execution_window(indicator_df, from_date, days)
+    if window is None or "open" not in indicator_df:
+        return None
+    entry, end = window
+    buy, sell = float(indicator_df["open"].iloc[entry]), float(indicator_df["open"].iloc[end])
+    if not np.isfinite(buy) or not np.isfinite(sell) or min(buy, sell) <= 0:
+        return None
+    cost = (BACKTEST["cost_bps_per_side"] + BACKTEST["slippage_bps_per_side"]) / 10000
+    return round((sell * (1-cost) / (buy * (1+cost)) - 1) * 100, 2)
+
+
+def _market_passes(spy_slice):
+    row = spy_slice.iloc[-1]
+    return evaluate_market(row.get("market_close"), row.get("market_ma50"),
+                           row.get("market_ma200"), row.get("vix"))["passed"]
 
 
 # ── Gemeinsames Setup ─────────────────────────────────────────────────────────
@@ -286,7 +318,7 @@ def _build_precomputed(years: int, step_weeks: int,
         logger.warning("Tickerliste nicht verfügbar")
         return {}, None, bt_dates, []
 
-    all_tickers = universe + ["SPY"]
+    all_tickers = list(dict.fromkeys(universe + ["SPY", "^GSPC", "^VIX"]))
     hist_raw = _download_prices(all_tickers, years, progress_callback)
 
     spy_raw = hist_raw.get("SPY")
@@ -305,6 +337,12 @@ def _build_precomputed(years: int, step_weeks: int,
             pass
 
     spy_ind = precomputed.get("SPY")
+    market = precomputed.get("^GSPC")
+    vix = precomputed.get("^VIX")
+    if spy_ind is not None:
+        for column, source in (("market_close", "close"), ("market_ma50", "ma50"), ("market_ma200", "ma200")):
+            spy_ind[column] = market[source].reindex(spy_ind.index) if market is not None else np.nan
+        spy_ind["vix"] = vix["close"].rolling(3).mean().reindex(spy_ind.index) if vix is not None else np.nan
     return precomputed, spy_ind, bt_dates, universe
 
 
@@ -316,106 +354,10 @@ def _simulate(precomputed: dict, spy_ind: pd.DataFrame,
     Führt Gate-1/2/3-Check für alle bt_dates durch.
     Gibt (trades, dates_simulated, dates_skipped_bearish) zurück.
     """
-    min_score     = params.get("min_score",          _TECH_MIN)
-    rsi_min       = params.get("rsi_min",            _RSI_MIN)
-    rsi_max       = params.get("rsi_max",            _RSI_MAX)
-    vol_factor    = params.get("volume_factor",      _VOL_FACTOR)
-    rs_top_pct    = params.get("rs_top_percentile",  _RS_TOP_PCT)
-    rs_min_6m     = params.get("rs_min_6m",          _RS_MIN_6M)
-
-    _universe = universe if universe is not None else [t for t in precomputed if t != "SPY"]
-
-    trades = []
-    dates_simulated = 0
-    dates_skipped = 0
-
-    for bt_date in bt_dates:
-        spy_slice = _slice_to_date(spy_ind, bt_date)
-        if len(spy_slice) < 200:
-            dates_skipped += 1
-            continue
-        spy_row = spy_slice.iloc[-1]
-        if not (spy_row["above_ma50"] and spy_row["above_ma200"]):
-            dates_skipped += 1
-            continue
-
-        spy_close_slice = spy_slice["close"]
-        sp_ret_3m = _return_since(spy_close_slice, 63)
-        sp_ret_6m = _return_since(spy_close_slice, 126)
-        if sp_ret_3m is None or sp_ret_6m is None:
-            dates_skipped += 1
-            continue
-
-        dates_simulated += 1
-        candidates = []
-
-        for ticker in _universe:
-            ind = precomputed.get(ticker)
-            if ind is None:
-                continue
-            ind_slice = _slice_to_date(ind, bt_date)
-            if len(ind_slice) < 200:
-                continue
-            row = ind_slice.iloc[-1]
-
-            tech_score = _tech_score_from_row(row, rsi_min, rsi_max, vol_factor)
-            if tech_score is None or tech_score < min_score:
-                continue
-
-            close_slice = ind_slice["close"]
-            ret_3m = _return_since(close_slice, 63)
-            ret_6m = _return_since(close_slice, 126)
-            if ret_3m is None or ret_6m is None:
-                continue
-
-            rs_3m = ret_3m - sp_ret_3m
-            rs_6m_val = ret_6m - sp_ret_6m
-
-            candidates.append({
-                "ticker":     ticker,
-                "price":      float(row["close"]),
-                "rs_score":   rs_3m + rs_6m_val,
-                "rs_6m":      rs_6m_val,
-                "tech_score": tech_score,
-            })
-
-        if not candidates:
-            continue
-
-        cutoff = float(np.percentile([c["rs_score"] for c in candidates],
-                                      (1 - rs_top_pct) * 100))
-        recommended = [c for c in candidates
-                       if c["rs_score"] >= cutoff and c["rs_6m"] >= rs_min_6m]
-
-        if not recommended:
-            continue
-
-        spy_perf_1m = _forward_return(spy_ind, bt_date, 30)
-        spy_perf_3m = _forward_return(spy_ind, bt_date, 90)
-
-        for c in recommended:
-            ind = precomputed.get(c["ticker"])
-            if ind is None:
-                continue
-            p1m = _forward_return(ind, bt_date, 30)
-            p3m = _forward_return(ind, bt_date, 90)
-            trades.append({
-                "date":        str(bt_date),
-                "ticker":      c["ticker"],
-                "entry_price": c["price"],
-                "tech_score":  c["tech_score"],
-                "rs_score":    c["rs_score"],
-                "rs_6m":       c["rs_6m"],
-                "perf_1m":     p1m,
-                "perf_3m":     p3m,
-                "spy_1m":      spy_perf_1m,
-                "spy_3m":      spy_perf_3m,
-                "vs_spy_1m":   round(p1m - spy_perf_1m, 2) if (p1m is not None and spy_perf_1m is not None) else None,
-                "hit_1m":      p1m > 0 if p1m is not None else None,
-                "hit_3m":      p3m > 0 if p3m is not None else None,
-            })
-
-    return trades, dates_simulated, dates_skipped
+    date_data = _precompute_date_data(precomputed, spy_ind, bt_dates, universe or [t for t in precomputed if t not in ("SPY", "^GSPC", "^VIX")])
+    trades = _simulate_from_cache(date_data, bt_dates, params)
+    simulated = sum(dd is not None for dd in date_data.values())
+    return trades, simulated, len(bt_dates)-simulated
 
 
 # ── Haupt-Backtest ────────────────────────────────────────────────────────────
@@ -450,11 +392,17 @@ def run_backtest(years: int = 2, step_weeks: int = 2, progress_callback=None) ->
         "rs_min_6m":         _RS_MIN_6M,
     }
 
-    trades, dates_simulated, dates_skipped = _simulate(
-        precomputed, spy_ind, bt_dates, default_params, universe
-    )
-
+    from backtest.compare import _build_enriched_date_data, _simulate_strategy, _select_v2, PARAMS_V2
+    from backtest.equity import simulate_equity
+    date_data = _build_enriched_date_data(precomputed, spy_ind, bt_dates, universe)
+    trades = _simulate_strategy(date_data, bt_dates, _select_v2, PARAMS_V2)
+    dates_simulated = sum(dd is not None for dd in date_data.values())
+    dates_skipped = len(bt_dates) - dates_simulated
     result = _compute_stats(trades, dates_simulated, dates_skipped, years, step_weeks)
+    result["selection"] = "v2"
+    if bt_dates:
+        result["equity"] = simulate_equity(
+            {**precomputed, "SPY": spy_ind}, trades, bt_dates[0], spy_ind.index[-1].date())
     _save_results(result)
     return result
 
@@ -515,8 +463,10 @@ def run_param_sweep(years: int = 3, step_weeks: int = 2,
 
     # Train/Test-Split (chronologisch)
     split_idx = int(len(bt_dates) * train_frac)
-    train_dates = bt_dates[:split_idx]
     test_dates = bt_dates[split_idx:]
+    # 90-day labels plus entry/exit holiday tolerance must finish BEFORE validation.
+    boundary = test_dates[0] if test_dates else date.max
+    train_dates = [d for d in bt_dates[:split_idx] if d + timedelta(days=100) < boundary]
 
     # Vorberechnete Date-Daten (einmalig für alle bt_dates — Haupt-Effizienz-Gewinn)
     if progress_callback:
@@ -617,13 +567,13 @@ def _precompute_date_data(precomputed: dict, spy_ind: pd.DataFrame,
             result[bt_date] = None
             continue
         spy_row = spy_slice.iloc[-1]
-        if not (spy_row["above_ma50"] and spy_row["above_ma200"]):
+        if not _market_passes(spy_slice):
             result[bt_date] = None
             continue
 
-        spy_close_slice = spy_slice["close"]
-        sp_ret_3m = _return_since(spy_close_slice, 63)
-        sp_ret_6m = _return_since(spy_close_slice, 126)
+        spy_close_slice = spy_slice["market_close"]
+        sp_ret_3m = _return_since(spy_close_slice, RELATIVE_STRENGTH["period_short_days"])
+        sp_ret_6m = _return_since(spy_close_slice, RELATIVE_STRENGTH["period_long_days"])
         if sp_ret_3m is None or sp_ret_6m is None:
             result[bt_date] = None
             continue
@@ -637,15 +587,15 @@ def _precompute_date_data(precomputed: dict, spy_ind: pd.DataFrame,
             if ind is None:
                 continue
             ind_slice = _slice_to_date(ind, bt_date)
-            if len(ind_slice) < 200:
+            if len(ind_slice) < 200 or ind_slice.index[-1] != spy_slice.index[-1]:
                 continue
             row = ind_slice.iloc[-1]
             if pd.isna(row.get("rsi", float("nan"))):
                 continue
 
             close_slice = ind_slice["close"]
-            ret_3m = _return_since(close_slice, 63)
-            ret_6m = _return_since(close_slice, 126)
+            ret_3m = _return_since(close_slice, RELATIVE_STRENGTH["period_short_days"])
+            ret_6m = _return_since(close_slice, RELATIVE_STRENGTH["period_long_days"])
             if ret_3m is None or ret_6m is None:
                 continue
 
@@ -653,10 +603,11 @@ def _precompute_date_data(precomputed: dict, spy_ind: pd.DataFrame,
             rs_6m_val = ret_6m - sp_ret_6m
 
             ticker_data[ticker] = {
+                **_entry_details(ind, bt_date),
                 "row":       row,
                 "price":     float(row["close"]),
-                "rs_score":  rs_3m + rs_6m_val,
-                "rs_6m":     rs_6m_val,
+                "rs_score":  round(rs_3m + rs_6m_val, 2),
+                "rs_6m":     round(rs_6m_val, 2),
                 "p1m":       _forward_return(ind, bt_date, 30),
                 "p3m":       _forward_return(ind, bt_date, 90),
             }
@@ -691,9 +642,11 @@ def _simulate_from_cache(date_data: dict, bt_dates: list, params: dict) -> list:
         candidates = []
         for ticker, td in dd["ticker_data"].items():
             tech_score = _tech_score_from_row(td["row"], rsi_min, rsi_max, vol_factor)
-            if tech_score is None or tech_score < min_score:
+            if tech_score is None:
                 continue
             candidates.append({
+                "entry_date": td.get("entry_date"),
+                "entry_price": td.get("entry_price"),
                 "ticker":     ticker,
                 "price":      td["price"],
                 "rs_score":   td["rs_score"],
@@ -706,10 +659,10 @@ def _simulate_from_cache(date_data: dict, bt_dates: list, params: dict) -> list:
         if not candidates:
             continue
 
-        cutoff = float(np.percentile([c["rs_score"] for c in candidates],
-                                      (1 - rs_top_pct) * 100))
-        recommended = [c for c in candidates
-                       if c["rs_score"] >= cutoff and c["rs_6m"] >= rs_min_6m]
+        decisions = select([SelectionInput(c["ticker"], c["rs_score"], c["rs_6m"],
+                            c["tech_score"] >= min_score, False, False) for c in candidates],
+                           top_pct=rs_top_pct, min_6m=rs_min_6m)
+        recommended = [c for c in candidates if decisions[c["ticker"]].recommended]
         if not recommended:
             continue
 
@@ -722,7 +675,9 @@ def _simulate_from_cache(date_data: dict, bt_dates: list, params: dict) -> list:
             trades.append({
                 "date":        str(bt_date),
                 "ticker":      c["ticker"],
-                "entry_price": c["price"],
+                "signal_price": c["price"],
+                "entry_price": c["entry_price"],
+                "entry_date": c["entry_date"],
                 "tech_score":  c["tech_score"],
                 "rs_score":    c["rs_score"],
                 "rs_6m":       c["rs_6m"],
@@ -813,6 +768,8 @@ def _compute_stats(trades: list[dict], dates_simulated: int, dates_skipped: int,
 
     return {
         "computed_at":           datetime.now().isoformat(),
+        "strategy": strategy_metadata(),
+        "limitations": ["Heutiges Indexuniversum (Survivorship-Bias)", "Keine historischen Fundamentals", "Signalstatistik: überlappende Beobachtungen"],
         "years":                 years,
         "step_weeks":            step_weeks,
         "dates_simulated":       dates_simulated,
@@ -824,7 +781,8 @@ def _compute_stats(trades: list[dict], dates_simulated: int, dates_skipped: int,
         "avg_return_1m":         _avg(t1m, "perf_1m"),
         "avg_vs_spy_1m":         _avg(t1m, "vs_spy_1m"),
         "sharpe_1m":             _sharpe(t1m, "perf_1m"),
-        "max_drawdown_1m":       _max_dd(t1m, "perf_1m"),
+        "max_drawdown_1m":       None,
+        "worst_trade_1m":        _max_dd(t1m, "perf_1m"),
         "hit_rate_3m":           _hit_rate(t3m, "hit_3m"),
         "avg_return_3m":         _avg(t3m, "perf_3m"),
         "by_month":              by_month,

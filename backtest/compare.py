@@ -26,9 +26,12 @@ import pandas as pd
 
 from backtest.runner import (
     _build_precomputed, _slice_to_date, _return_since, _forward_return,
-    _tech_score_from_row, _compute_stats,
+    _tech_score_from_row, _compute_stats, _market_passes, _entry_details,
     _RS_TOP_PCT, _RS_MIN_6M, _TECH_MIN, _RSI_MIN, _RSI_MAX, _VOL_FACTOR,
 )
+
+from analyzer.strategy import SelectionInput, select, strategy_metadata
+from config import RECOMMENDER_V2, RELATIVE_STRENGTH
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +59,11 @@ PARAMS_V1 = {
 #   vol_cap_annual / rs_parabolic_cap — Entry-Filter fangen Gap-/Blowup-Risiko nicht;
 #   das ist Aufgabe der Stop-/Exit-Logik (im Backtest nicht modelliert). Daher deaktiviert.
 PARAMS_V2 = {
-    "rsi_min":            45,
-    "rsi_max":            70,
-    "volume_factor":      1.2,
-    "rs_top_percentile":  0.20,
-    "rs_min_6m":          0.0,
+    "rsi_min":            _RSI_MIN,
+    "rsi_max":            _RSI_MAX,
+    "volume_factor":      _VOL_FACTOR,
+    "rs_top_percentile":  RECOMMENDER_V2["rs_top_percentile"],
+    "rs_min_6m":          _RS_MIN_6M,
     "require_full_trend": True,
     "require_not_overbought": True,
     "vol_cap_annual":     1e9,     # deaktiviert
@@ -68,7 +71,7 @@ PARAMS_V2 = {
     # Top-N-Begrenzung (Filter-Experimente, scripts/experiment_filters.py):
     # Konzentration auf die N RS-stärksten dominiert alle anderen Hebel —
     # Top-10: +2,12 % vs SPY (11/11 Jahre positiv) statt +0,65 % beim vollen Korb.
-    "top_n":              10,
+    "top_n":              RECOMMENDER_V2["top_n"],
 }
 
 
@@ -84,13 +87,13 @@ def _build_enriched_date_data(precomputed, spy_ind, bt_dates, universe):
             result[bt_date] = None
             continue
         spy_row = spy_slice.iloc[-1]
-        if not (spy_row["above_ma50"] and spy_row["above_ma200"]):
+        if not _market_passes(spy_slice):
             result[bt_date] = None
             continue
 
-        spy_close = spy_slice["close"]
-        sp_ret_3m = _return_since(spy_close, 63)
-        sp_ret_6m = _return_since(spy_close, 126)
+        spy_close = spy_slice["market_close"]
+        sp_ret_3m = _return_since(spy_close, RELATIVE_STRENGTH["period_short_days"])
+        sp_ret_6m = _return_since(spy_close, RELATIVE_STRENGTH["period_long_days"])
         if sp_ret_3m is None or sp_ret_6m is None:
             result[bt_date] = None
             continue
@@ -101,15 +104,15 @@ def _build_enriched_date_data(precomputed, spy_ind, bt_dates, universe):
             if ind is None:
                 continue
             ind_slice = _slice_to_date(ind, bt_date)
-            if len(ind_slice) < 200:
+            if len(ind_slice) < 200 or ind_slice.index[-1] != spy_slice.index[-1]:
                 continue
             row = ind_slice.iloc[-1]
             if pd.isna(row.get("rsi", float("nan"))):
                 continue
 
             close_slice = ind_slice["close"]
-            ret_3m = _return_since(close_slice, 63)
-            ret_6m = _return_since(close_slice, 126)
+            ret_3m = _return_since(close_slice, RELATIVE_STRENGTH["period_short_days"])
+            ret_6m = _return_since(close_slice, RELATIVE_STRENGTH["period_long_days"])
             if ret_3m is None or ret_6m is None:
                 continue
 
@@ -118,10 +121,11 @@ def _build_enriched_date_data(precomputed, spy_ind, bt_dates, universe):
             vol_annual = float(daily.std() * np.sqrt(252)) if len(daily) >= 10 else None
 
             ticker_data[ticker] = {
+                **_entry_details(ind, bt_date),
                 "row":      row,
                 "price":    float(row["close"]),
-                "rs_score": ret_3m - sp_ret_3m + ret_6m - sp_ret_6m,
-                "rs_6m":    ret_6m - sp_ret_6m,
+                "rs_score": round(ret_3m - sp_ret_3m + ret_6m - sp_ret_6m, 2),
+                "rs_6m":    round(ret_6m - sp_ret_6m, 2),
                 "vol":      vol_annual,
                 "p1m":      _forward_return(ind, bt_date, 30),
                 "p3m":      _forward_return(ind, bt_date, 90),
@@ -136,53 +140,33 @@ def _build_enriched_date_data(precomputed, spy_ind, bt_dates, universe):
     return result
 
 
-def _select_v1(ticker_data: dict, p: dict) -> list:
-    """Aktuelle Logik: Tech-Score-Schwelle, dann RS-Perzentil top 33 % unter den Tech-Passern."""
-    cands = []
+def _selection(ticker_data, p):
+    inputs = []
     for tk, td in ticker_data.items():
-        ts = _tech_score_from_row(td["row"], p["rsi_min"], p["rsi_max"], p["volume_factor"])
-        if ts is None or ts < p["min_score"]:
-            continue
-        cands.append((tk, td, ts))
-    if not cands:
-        return []
-    cutoff = float(np.percentile([c[1]["rs_score"] for c in cands], (1 - p["rs_top_percentile"]) * 100))
-    return [(tk, td) for tk, td, ts in cands
-            if td["rs_score"] >= cutoff and td["rs_6m"] >= p["rs_min_6m"]]
+        row = td["row"]
+        score = _tech_score_from_row(row, p["rsi_min"], p["rsi_max"], p["volume_factor"])
+        inputs.append(SelectionInput(tk, td["rs_score"], td["rs_6m"],
+            score is not None and score >= p.get("min_score", _TECH_MIN),
+            (not p.get("require_full_trend", True) or bool(row.get("above_ma50") and row.get("above_ma200")))
+            and (p.get("vol_cap_annual", 1e9) >= 1e9 or
+                 (td.get("vol") is not None and td["vol"] <= p["vol_cap_annual"]))
+            and td["rs_score"] <= p.get("rs_parabolic_cap", 1e9),
+            not p.get("require_not_overbought", True) or
+            (bool(row.get("bb_ok")) and float(row.get("rsi", float("nan"))) <= p["rsi_max"])))
+    return select(inputs, top_pct=p.get("rs_top_percentile", _RS_TOP_PCT),
+                  top_pct_v2=p.get("rs_top_percentile", RECOMMENDER_V2["rs_top_percentile"]),
+                  min_6m=p.get("rs_min_6m", _RS_MIN_6M), top_n=p.get("top_n", RECOMMENDER_V2["top_n"]))
+
+
+def _select_v1(ticker_data: dict, p: dict) -> list:
+    decisions = _selection(ticker_data, p)
+    return [(tk, td) for tk, td in ticker_data.items() if decisions[tk].recommended]
 
 
 def _select_v2(ticker_data: dict, p: dict) -> list:
-    """
-    Optimierte Logik:
-      - Trend Pflicht: über MA50 UND MA200
-      - nicht überkauft: RSI ≤ rsi_max UND unter oberem BB-Band
-      - Volatilitäts-Deckel + Anti-Parabel-Filter (Tail-Schutz)
-      - dann strengeres RS-Perzentil (top 20 %) unter den Survivors
-    """
-    cands = []
-    for tk, td in ticker_data.items():
-        row = td["row"]
-        if p.get("require_full_trend") and not (row.get("above_ma50") and row.get("above_ma200")):
-            continue
-        if p.get("require_not_overbought"):
-            rsi = float(row.get("rsi", 50))
-            if rsi > p["rsi_max"] or not bool(row.get("bb_ok", True)):
-                continue
-        vol = td.get("vol")
-        if vol is not None and vol > p["vol_cap_annual"]:
-            continue
-        if td["rs_score"] > p["rs_parabolic_cap"]:
-            continue
-        cands.append((tk, td))
-    if not cands:
-        return []
-    cutoff = float(np.percentile([c[1]["rs_score"] for c in cands], (1 - p["rs_top_percentile"]) * 100))
-    sel = [(tk, td) for tk, td in cands
-           if td["rs_score"] >= cutoff and td["rs_6m"] >= p["rs_min_6m"]]
-    top_n = p.get("top_n")
-    if top_n:
-        sel = sorted(sel, key=lambda x: -x[1]["rs_score"])[:top_n]
-    return sel
+    decisions = _selection(ticker_data, p)
+    selected = [(tk, td) for tk, td in ticker_data.items() if decisions[tk].recommended_v2]
+    return sorted(selected, key=lambda x: decisions[x[0]].v2_rank)
 
 
 def _simulate_strategy(date_data: dict, bt_dates: list, select_fn, params: dict) -> list:
@@ -199,7 +183,8 @@ def _simulate_strategy(date_data: dict, bt_dates: list, select_fn, params: dict)
         for tk, td in selected:
             p1m, p3m = td["p1m"], td["p3m"]
             trades.append({
-                "date": str(bt_date), "ticker": tk, "entry_price": td["price"],
+                "date": str(bt_date), "ticker": tk, "signal_price": td["price"],
+                "entry_price": td.get("entry_price"), "entry_date": td.get("entry_date"),
                 "tech_score": _tech_score_from_row(td["row"], params.get("rsi_min", _RSI_MIN),
                                                    params.get("rsi_max", _RSI_MAX),
                                                    params.get("volume_factor", _VOL_FACTOR)),
@@ -223,7 +208,9 @@ def get_date_data(years: int = 10, step_weeks: int = 2, progress_callback=None,
             with open(_DD_CACHE, "rb") as f:
                 blob = pickle.load(f)
             if (blob.get("years") == years and blob.get("step_weeks") == step_weeks
-                    and blob.get("bt_dates") and blob.get("date_data")):
+                    and blob.get("bt_dates") and blob.get("date_data")
+                    and blob.get("strategy") == strategy_metadata()
+                    and blob.get("as_of") == str(__import__("datetime").date.today())):
                 return blob["bt_dates"], blob["date_data"]
         except Exception:
             pass
@@ -239,6 +226,7 @@ def get_date_data(years: int = 10, step_weeks: int = 2, progress_callback=None,
         os.makedirs(os.path.dirname(_DD_CACHE), exist_ok=True)
         with open(_DD_CACHE, "wb") as f:
             pickle.dump({"years": years, "step_weeks": step_weeks,
+                         "strategy": strategy_metadata(), "as_of": str(__import__("datetime").date.today()),
                          "bt_dates": bt_dates, "date_data": date_data}, f)
     except Exception as e:
         logger.debug(f"DD-Cache Schreibfehler: {e}")

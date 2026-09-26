@@ -8,10 +8,28 @@ def _fmt_ts(ts: str) -> str:
     """ISO-Zeitstempel → lesbares deutsches Format (Europe/Berlin)."""
     try:
         from zoneinfo import ZoneInfo
-        dt = datetime.fromisoformat(ts).replace(tzinfo=ZoneInfo("UTC"))
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
         return dt.astimezone(ZoneInfo("Europe/Berlin")).strftime("%d.%m.%Y %H:%M") + " (DE)"
     except Exception:
         return ts
+
+
+def render_data_status(result):
+    if not result:
+        st.info("Noch kein gespeicherter Scan verfügbar.")
+        return
+    from analyzer.sessions import last_completed_session
+    from analyzer.strategy import strategy_metadata
+    st.caption(f"Letzter erfolgreicher Scan: {_fmt_ts(result.get('timestamp', '—'))}")
+    strategy = result.get("strategy") or {}
+    current = strategy_metadata()
+    if strategy.get("version") != current["version"] or strategy.get("config_hash") != current["config_hash"]:
+        st.warning("Archivierte Auswahl mit früheren Regeln. Ein neuer Scan ist erforderlich.")
+    data_date = (result.get("market") or {}).get("data_as_of")
+    if not data_date or data_date < str(last_completed_session()):
+        st.warning("Kursdaten sind nicht auf dem Stand der letzten abgeschlossenen US-Handelssitzung.")
 
 
 
@@ -45,23 +63,16 @@ def _render_exit_signals(exits: dict, entry_price: float = None):
     st.divider()
     col1, col2, col3 = st.columns(3)
     atr = exits.get("atr")
-    sl = exits.get("stop_loss")
-    tp = exits.get("take_profit")
-    stop_label = exits.get("stop_label") or "Stop-Loss"
     with col1:
         ep_str = f"€{entry_price:.2f}" if entry_price else "—"
         st.metric("Aktueller Kurs", ep_str)
     with col2:
-        sl_delta = f"-{abs(sl - entry_price):.2f}" if sl is not None and entry_price else None
-        st.metric(stop_label, f"€{sl:.2f}" if sl is not None else "N/A",
-                  delta=sl_delta, delta_color="inverse")
+        st.metric("Automatischer Stop", "—")
     with col3:
-        tp_delta = f"+{abs(tp - entry_price):.2f}" if tp is not None and entry_price else None
-        st.metric("Take-Profit (ATR×3, dynamisch)", f"€{tp:.2f}" if tp is not None else "N/A",
-                  delta=tp_delta, delta_color="normal")
+        st.metric("Automatisches Kursziel", "—")
 
     if atr:
-        st.caption(f"ATR(14): {atr:.4f} USD — Stop und Take-Profit passen sich täglich an den aktuellen Kurs an.")
+        st.caption(f"ATR(14): {atr:.4f} USD — Volatilitätsmaß, kein automatischer Verkaufsauftrag.")
 
     st.divider()
     signals = exits.get("signals", {})

@@ -10,7 +10,10 @@ import numpy as np
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
+from dataclasses import asdict
+from analyzer.strategy import SelectionInput, select, strategy_metadata
+from analyzer.sessions import completed_bars, last_completed_session
 
 from analyzer.universe import get_sp500_tickers, get_universe_info
 from analyzer.market_filter import check_market
@@ -34,7 +37,7 @@ _SLIM_KEYS = ("ticker", "name", "sector", "recommended",
               # v2-Parallelalgorithmus (additiv)
               "recommended_v2", "gate_rs_v2", "trend_ok", "not_overbought",
               # v2-Rang (1..top_n) + MACD als Tiebreaker-Anzeige
-              "v2_rank", "macd_bull")
+              "v2_rank", "macd_bull", "data_as_of")
 
 
 def _slim(r: dict) -> dict:
@@ -64,7 +67,7 @@ def run_full_scan(progress_callback=None) -> dict:
     }
     """
     start = time.time()
-    timestamp = datetime.now().isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
 
     # Gate 1: Marktcheck
     market = check_market()
@@ -81,6 +84,7 @@ def run_full_scan(progress_callback=None) -> dict:
         # wurde nie eine Tickerliste geholt — source=None heißt korrekt "kein Scan".
         return {
             "timestamp": timestamp,
+            "strategy": strategy_metadata(),
             "market": market,
             "recommendations": [],
             "recommendations_v2": [],
@@ -157,17 +161,15 @@ def run_full_scan(progress_callback=None) -> dict:
     # Gate-2-Post-Pass: RS-Perzentil-Ranking über alle analysierten Ticker
     results = _apply_rs_percentile(results, market)
 
-    # Sortierung: Empfehlungen zuerst, dann nach Tech-Score
-    results.sort(key=lambda x: (not x["recommended"], -x["tech_score"]))
-    recommendations = [r for r in results if r["recommended"]]
-    # v2-Parallelliste: nach RS-Score sortiert (v2s primäres Signal), geslimmt
-    # (kein hist/Charts nötig — dient dem Vergleich, nicht der Detailansicht).
-    recommendations_v2 = [
-        _slim(r) for r in sorted(
-            (r for r in results if r.get("recommended_v2")),
-            key=lambda x: -(x.get("rs", {}).get("rs_score") or 0),
-        )
-    ]
+    # v2 ist die aktive Strategie. v1 bleibt ausschließlich als Diagnosefeld
+    # erhalten; dadurch entspricht die Kaufansicht exakt der geprüften Auswahl.
+    recommendations_v2 = sorted(
+        (r for r in results if r.get("recommended_v2")),
+        key=lambda x: x.get("v2_rank") or float("inf"),
+    )
+    recommendations = [r for r in results if r.get("recommended")]
+    results.sort(key=lambda x: (not x.get("recommended_v2", False), x.get("v2_rank") or float("inf"),
+                                -(x.get("rs", {}).get("rs_score") or 0)))
     all_results = [_slim(r) for r in results]
 
     logger.info(f"Scan abgeschlossen: {len(recommendations)} v1-Empfehlungen, "
@@ -177,6 +179,7 @@ def run_full_scan(progress_callback=None) -> dict:
 
     return {
         "timestamp": timestamp,
+        "strategy": strategy_metadata(),
         "market": market,
         "recommendations": recommendations,
         "recommendations_v2": recommendations_v2,
@@ -206,63 +209,14 @@ def _apply_rs_percentile(results: list, market: dict) -> list:
     Statt eines harten >0-Schnitts qualifizieren nur Aktien im Top-X%-Perzentil
     nach rs_score (= rs_3m + rs_6m) UND mit rs_6m >= rs_min_6m (absoluter Floor).
     """
-    top_pct = RELATIVE_STRENGTH.get("rs_top_percentile", 0.33)
-    min_6m = RELATIVE_STRENGTH.get("rs_min_6m", 0.0)
-    top_pct_v2 = RECOMMENDER_V2.get("rs_top_percentile", 0.20)
-
-    # Nur Ergebnisse mit gültigem rs_score
-    valid = [r for r in results if r.get("rs", {}).get("rs_score") is not None]
-    if not valid:
-        return results
-
-    scores = [r["rs"]["rs_score"] for r in valid]
-    cutoff = float(np.percentile(scores, (1 - top_pct) * 100))
-    cutoff_v2 = float(np.percentile(scores, (1 - top_pct_v2) * 100))
-    logger.info(f"RS-Perzentil-Cutoff v1 (top {int(top_pct*100)}%): {cutoff:.2f} | "
-                f"v2 (top {int(top_pct_v2*100)}%): {cutoff_v2:.2f} | "
-                f"Basis: {len(valid)} Titel mit gültigem RS-Score")
-
+    inputs = [SelectionInput(
+        r["ticker"], (r.get("rs") or {}).get("rs_score"), (r.get("rs") or {}).get("rs_6m"),
+        r.get("gate_tech", False), r.get("trend_ok", False), r.get("not_overbought", False),
+        r.get("gate_fund", False)) for r in results]
+    decisions = select(inputs, market_passed=market.get("passed", True))
     for r in results:
-        rs = r.get("rs", {})
-        rs_score = rs.get("rs_score")
-        rs_6m = rs.get("rs_6m") or 0.0
-
-        if rs_score is None:
-            gate_rs = False
-            gate_rs_v2 = False
-        else:
-            gate_rs = bool(rs_score >= cutoff and rs_6m >= min_6m)
-            gate_rs_v2 = bool(rs_score >= cutoff_v2 and rs_6m >= min_6m)
-
-        r["gate_rs"] = gate_rs
-        r["rs"]["passed"] = gate_rs
-        r["recommended"] = gate_rs and r.get("gate_tech", False) and r.get("gate_fund", False)
-
-        # v2-Parallelalgorithmus: strengerer RS-Schnitt + Trend-Pflicht + nicht überkauft,
-        # Gate 4 (Fundamentals) bleibt. Tech-Score-Schwelle (gate_tech) bewusst NICHT —
-        # sie hatte im 10J-Backtest keine Vorhersagekraft.
-        r["gate_rs_v2"] = gate_rs_v2
-        r["recommended_v2"] = bool(
-            gate_rs_v2 and r.get("trend_ok", False)
-            and r.get("not_overbought", False) and r.get("gate_fund", False)
-        )
-        r["v2_rank"] = None
-
-    # Top-N-Begrenzung: nur die N RS-stärksten v2-Survivors empfehlen.
-    # Filter-Experimente (scripts/experiment_filters.py, 10J-Daten): Konzentration
-    # auf Top-10 hebt vs SPY von +0,65 % auf +2,12 %/Monat bei 11/11 positiven
-    # Jahren; die Top-5 sind nochmal stärker und werden via v2_rank markiert.
-    top_n = RECOMMENDER_V2.get("top_n", 10)
-    v2_survivors = sorted(
-        (r for r in results if r["recommended_v2"]),
-        key=lambda x: -(x.get("rs", {}).get("rs_score") or 0),
-    )
-    for rank, r in enumerate(v2_survivors, 1):
-        if rank <= top_n:
-            r["v2_rank"] = rank
-        else:
-            r["recommended_v2"] = False
-
+        r.update(asdict(decisions[r["ticker"]]))
+        r.setdefault("rs", {})["passed"] = r["gate_rs"]
     return results
 
 
@@ -309,7 +263,7 @@ def _batch_download(tickers: list) -> dict:
             for ticker in batch:
                 try:
                     if len(batch) == 1:
-                        df = raw.copy()
+                        df = raw[batch[0]].copy() if isinstance(raw.columns, pd.MultiIndex) else raw.copy()
                     else:
                         df = raw[ticker].copy()
                     df = df.dropna(how="all")
@@ -333,7 +287,7 @@ def _batch_download(tickers: list) -> dict:
 def _get_sp500_history() -> pd.Series:
     try:
         sp = yf.Ticker("^GSPC")
-        hist = sp.history(period="1y")
+        hist = completed_bars(sp.history(period="1y"))
         return hist["Close"]
     except Exception as e:
         logger.error(f"S&P500-History-Fehler: {e}")
@@ -353,6 +307,12 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
             if hist is None or len(hist) < 60:
                 return None
 
+        hist = completed_bars(hist)
+        hist = hist.dropna(subset=["Close"])
+        if not hist.index.is_monotonic_increasing or not hist.index.is_unique:
+            return None
+        if len(hist) < 200 or hist.index[-1].date() != last_completed_session():
+            return None
         close = hist["Close"]
 
         # Gate 2: Relative Stärke
@@ -361,27 +321,22 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
         # Gate 3: Technische Analyse
         tech = check_technical(hist)
 
-        # Gate 4: Fundamentalanalyse — nur wenn Gate 3 bestanden.
-        # Gate 2 (RS-Rang) wird erst im Post-Pass bestimmt; Gate 3 als Filter reicht.
-        # info kommt aus dem Fundamentals-Cache (TTL 3 Tage) — Ticker.info ist der
-        # teuerste Einzelcall im Scan und ändert sich nur quartalsweise.
-        if tech["passed"]:
-            info = get_info_cached(ticker)
-        else:
-            info = {}
-        fund = check_fundamental(info)
-
-        recommended = rs["passed"] and tech["passed"] and fund["passed"]
-
         # v2-Parallelalgorithmus: strukturelle Filter (statt Tech-Score-Schwelle).
         # Trend = über MA50 UND MA200; nicht überkauft = unter oberem BB-Band UND RSI ≤ Max.
         _sig = tech.get("signals", {})
-        _rsi_v = tech.get("indicators", {}).get("rsi_value")
+        _ind = tech.get("indicators", {})
+        _rsi_v = _ind.get("rsi_value_raw", _ind.get("rsi_value"))
         trend_ok = bool(_sig.get("Kurs über 50-Tage-MA") and _sig.get("Kurs über 200-Tage-MA"))
         not_overbought = bool(
             _sig.get("Nicht überkauft (Bollinger)")
             and _rsi_v is not None and _rsi_v <= TECHNICAL["rsi_max"]
         )
+
+        # Fetch fundamentals for the union, including v2-only technical candidates.
+        eligible = tech["passed"] or (trend_ok and not_overbought)
+        info = get_info_cached(ticker) if eligible else {}
+        fund = check_fundamental(info)
+        recommended = rs["passed"] and tech["passed"] and fund["passed"]
 
         # Additiv: Konfidenz-Ranking (ändert recommended nicht)
         _mkt = market or {}
@@ -453,6 +408,8 @@ def _analyze_ticker(ticker: str, sp500_hist: pd.Series,
             "fund": fund,
             "price": current_price,
             "hist": hist,
+            "data_as_of": str(hist.index[-1].date()),
+            "chart_dates": [str(d.date()) for d in hist.index],
         }
 
     except Exception as e:

@@ -48,20 +48,7 @@ def page_portfolio():
                 (p.get("current_price_eur") or 0) * p.get("total_shares", 0)
                 for p in positions
             )
-            worst_case_eur = 0.0
-            eurusd = positions[0].get("eurusd") or 1.0
-            for p in positions:
-                sl_usd = (p.get("exits") or {}).get("stop_loss")
-                curr_usd = p.get("current_price_usd")
-                if sl_usd and curr_usd:
-                    loss_usd = (curr_usd - sl_usd) * p.get("total_shares", 0)
-                    worst_case_eur += loss_usd / eurusd
-            if total_value_eur > 0 and worst_case_eur > 0:
-                worst_pct = worst_case_eur / total_value_eur * 100
-                st.warning(
-                    f"⚠️ Max. Risiko bei Stop-Loss-Hit aller Positionen: "
-                    f"**-€{worst_case_eur:,.0f}** ({worst_pct:.1f}% des Portfoliowerts)"
-                )
+            st.caption("Risiko wird über Positions- und Sektorgrenzen gesteuert; automatische Stops sind deaktiviert.")
 
             # Positions-Donut: Anteil je Aktie am Gesamtportfolio
             if len(positions) >= 1 and total_value_eur > 0:

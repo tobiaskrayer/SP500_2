@@ -90,8 +90,12 @@ UPSIDE = {
 CACHE = {
     "dir": "cache",
     "max_age_days": 7,      # Cache-Dateien älter als X Tage löschen
-    "refresh_hour": 18,     # Tägliche Aktualisierung um 18:00 Uhr (nach US-Marktschluss)
+    "refresh_hour": 17,     # America/New_York; abgeschlossene Sitzung prüfen
 }
+
+# Ausführbare Modellannahmen, keine Renditeversprechen. Cash bleibt unverzinst.
+BACKTEST = {"holding_days": 30, "cost_bps_per_side": 10.0, "slippage_bps_per_side": 5.0}
+PORTFOLIO_RISK = {"max_position_weight": 0.10, "max_sector_weight": 0.30}
 
 # --- Netzwerk ---
 NETWORK = {

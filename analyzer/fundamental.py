@@ -4,6 +4,7 @@ Score muss >= config.FUNDAMENTAL["min_score"] sein (Standard: 60%).
 """
 
 import logging
+import math
 from config import FUNDAMENTAL
 
 logger = logging.getLogger(__name__)
@@ -26,12 +27,17 @@ def check_fundamental(info: dict) -> dict:
         "score": 0.0,
         "signals": {},
         "metrics": {},
+        "raw_metrics": {},
+        "missing_metrics": [],
     }
 
     if not info:
+        result["missing_metrics"] = ["pe", "revenue_growth", "profit_margin", "debt_to_equity", "free_cashflow"]
         return result
 
     try:
+        info = {key: (None if isinstance(value, (int, float)) and not math.isfinite(value) else value)
+                for key, value in info.items()}
         pe = info.get("trailingPE")
         rev_growth = info.get("revenueGrowth")
         earnings_growth = info.get("earningsGrowth")
@@ -58,6 +64,12 @@ def check_fundamental(info: dict) -> dict:
 
         score = sum(signals.values()) / len(signals)
 
+        result["raw_metrics"] = {"pe": pe, "revenue_growth": rev_growth,
+                                 "earnings_growth": earnings_growth, "profit_margin": profit_margin,
+                                 "debt_to_equity": debt_equity, "free_cashflow": free_cf,
+                                 "market_cap": market_cap}
+        result["missing_metrics"] = [key for key in ("pe", "revenue_growth", "profit_margin", "debt_to_equity", "free_cashflow")
+                                     if result["raw_metrics"][key] is None]
         result["signals"] = signals
         result["score"] = round(score, 3)
         result["passed"] = score >= FUNDAMENTAL["min_score"]
